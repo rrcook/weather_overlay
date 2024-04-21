@@ -11,6 +11,8 @@ defmodule NaplpsWriter do
   # What is happening will be obvious from the byte passed in
   def append_byte(buffer, byte), do: buffer <> << byte >>
 
+  def append_bytes(buffer, bytes), do: buffer <> IO.iodata_to_binary(bytes)
+
   defp prepend_sign(number, char_list) do
     cond do
       number < 0 -> [?1 | char_list]
