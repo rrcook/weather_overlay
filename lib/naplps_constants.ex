@@ -81,6 +81,8 @@ defmodule NaplpsConstants do
       @color_cyan            0xF8
       @color_dark_cyan       0xFC
 
+      @hatching_solid        0xC0
+      @hatching_vertical     0xC8
 
     end
   end
