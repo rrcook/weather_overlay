@@ -3,27 +3,77 @@ defmodule WeatherMapper do
   use NaplpsConstants
 
   # Constants used for geographic conversion, latitude & longitude to Prodigy X, Y
+
   # @min_longitude        -124.10
-  @min_longitude -126.10
+  # @min_longitude -126.10
   # @max_longitude        -68.12
-  @longitude_factor 3.7692
+  # @longitude_factor 3.7692
 
-  @min_latitude 25.1
+  # @min_latitude 25.1
   # @max_latitude         49.03
-  @latitude_factor 5.375
+  # @latitude_factor 5.375
 
-  @min_x 36
-  # @max_x                247
-  @min_y 53
-  # @max_y                182
+  # The x's and y's from looking at an equal area (laea, epsg 2163) map and inputting the
+  # latitude and longitude into Proj, getting the x and y back.
+  @west_2163            -2027511
+  @east_2163            2514264
+  @south_2163           -2102532
+  @north_2163           717248
 
-  defp longitude_to_x(longitude), do: (longitude - @min_longitude) * @longitude_factor + @min_x
+  # the x' and y's from GCU, looking at the weather map in GCU and getting the x and y
+  # from the cursor.
+  @min_x                36
+  @max_x                253
+  @min_y                53
+  @max_y                182
 
-  defp latitude_to_y(latitude), do: (latitude - @min_latitude) * @latitude_factor + @min_y
+  @min_x_range          36  / 256
+  @max_x_range          253 / 256
+  @min_y_range          53  / 256
+  @max_y_range          182 / 256
+
+  @x_factor             (@max_x - @min_x) / (@east_2163 - @west_2163)
+  @y_factor             (@max_y - @min_y) / (@north_2163 - @south_2163)
+
+  defp meters_to_x(meters), do: (meters - @west_2163) * @x_factor + @min_x
+
+  defp meters_to_y(meters), do: (meters - @south_2163) * @y_factor + @min_y
+
+  def within_continental({x, y}) do
+    x >= @min_x_range &&
+    x <= @max_x_range &&
+    y >= @min_y_range &&
+    y <= @max_y_range
+  end
+
+  defp equalarea2() do
+    if :ets.info(:equal_area) == :undefined do
+      :ets.new(:equal_area, [:public, :named_table])
+    end
+    case :ets.lookup(:equal_area, :equal_area) do
+      [] ->
+        {:ok, proj} = Proj.from_epsg(2163)
+        :ets.insert(:equal_area, {:equal_area, proj})
+        proj
+      [equal_area: proj] ->
+        proj
+    end
+
+  end
+
+  defp equalarea() do
+    # In the interest of performance and calling this a lot we assume that
+    # the table is there and set up
+    [equal_area: proj] = :ets.lookup(:weather, :equal_area)
+    proj
+  end
 
   # The small lists from the feature collection are longitude, latitude, not lat, long
-  def geo_to_gcu({longitude, latitude}),
-    do: {longitude_to_x(longitude) / 256, latitude_to_y(latitude) / 256}
+  def geo_to_gcu({longitude, latitude}) do
+    {x_meters, y_meters} = Proj.from_lat_lng!({latitude, longitude}, equalarea())
+    {meters_to_x(x_meters) / 256, meters_to_y(y_meters) / 256}
+  end
+    # do: {longitude_to_x(longitude) / 256, latitude_to_y(latitude) / 256}
 
   # Round "down" temps, 63 -> 60, -15 -> -10. Used to set up basic weather temps
   defp temp_mod(temp) when temp < 0, do: -1 * temp_mod(abs(temp))
@@ -40,13 +90,13 @@ defmodule WeatherMapper do
   defp nil_check(nil), do: {:error, nil}
   defp nil_check(value), do: {:ok, value}
 
-  # Simple check for status code for HTTP response codes
-  defp status_check(200), do: {:ok, 200}
-  defp status_check(status_code), do: {:error, status_code}
-
   # Used for filtering functions
   def is_ok({:ok, _}), do: true
   def is_ok(_), do: false
+
+  # Simple check for status code for HTTP response codes
+  defp status_check(200), do: {:ok, 200}
+  defp status_check(status_code), do: {:error, status_code}
 
   # Used to make proper polygons for rain maps
   # The original coordinates from the govt are absolutes in [lat, long], we need to convert
@@ -54,9 +104,9 @@ defmodule WeatherMapper do
 
   # This function takes a list of values and converts it to a starting value and
   # the difference needed to get to the next value.
+  defp diff_list(values), do: diff_list([0 | values], [])
   defp diff_list([_head], acc), do: Enum.reverse(acc)
   defp diff_list([head | tail], acc), do: diff_list(tail, [hd(tail) - head | acc])
-  defp diff_list(values), do: diff_list([0 | values], [])
 
   # Takes the feature collection [lat, long] lists and converts them to a list of
   # tuples with the lat and long differences
