@@ -27,7 +27,6 @@ defmodule Header do
 
   end
 
-  def concat_buffers(buffers), do: Enum.reduce(buffers, <<>>, fn buffer, acc -> acc <> buffer end)
   # The length of all the static parts of the header
   # name, ext, sequence, type, length, candicacy high, num objects, candicacy low
 
@@ -38,7 +37,7 @@ defmodule Header do
     def encode(%Header{} = header) do
       encoded_buffer =
         Enum.map(header.object_list, fn o -> ObjectEncoder.encode(o) end)
-        |> Header.concat_buffers()
+        |> IO.iodata_to_binary()
 
       header_length = @static_size + byte_size(encoded_buffer)
 
