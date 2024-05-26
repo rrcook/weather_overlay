@@ -14,16 +14,18 @@ defmodule NaplpsWriter.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger],
+      mod: {WeatherInit, []}
     ]
   end
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:jason, "~> 1.4"},
       {:httpoison, "~> 1.8.2"},
       {:elixir_xml_to_map, "~> 3.1"},
-      {:enum_type, "~> 1.1.0"}
+      {:proj, "~> 0.2.3"}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]

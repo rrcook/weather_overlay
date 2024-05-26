@@ -46,21 +46,6 @@ defmodule WeatherMapper do
     y <= @max_y_range
   end
 
-  defp equalarea2() do
-    if :ets.info(:equal_area) == :undefined do
-      :ets.new(:equal_area, [:public, :named_table])
-    end
-    case :ets.lookup(:equal_area, :equal_area) do
-      [] ->
-        {:ok, proj} = Proj.from_epsg(2163)
-        :ets.insert(:equal_area, {:equal_area, proj})
-        proj
-      [equal_area: proj] ->
-        proj
-    end
-
-  end
-
   defp equalarea() do
     # In the interest of performance and calling this a lot we assume that
     # the table is there and set up
