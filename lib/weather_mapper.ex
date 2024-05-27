@@ -100,6 +100,8 @@ defmodule WeatherMapper do
     Enum.zip(diff_list(lats), diff_list(longs))
   end
 
+  # "Railway" wrapper around our xml to map function, will return a tuple with
+  # :ok or :error
   defp ex_naive_map(text) do
     try do
       xml_map = XmlToMap.naive_map(text)
@@ -139,8 +141,9 @@ defmodule WeatherMapper do
   # Convert to a list of tuples
   # Convert from {long, lat} to {gcu x, gcu y}
   # Unzip into two lists
-  #
-
+  # Make each list, xs and ys, into lists of differences from the
+  #  starting point
+  # zip the lists back into {x, y} pairs
   def convert_poly(poly) do
     {xs, ys} =
       poly

@@ -20,6 +20,12 @@ defmodule NaplpsWriter do
     end
   end
 
+  ##################
+  # Functions to do conversion of x and y co-ordinates into the multi-byte format that
+  # NAPLPS requires.
+  # The entry is mb_xy, as a single value or a list
+  #
+
   defp char_to_bit(?1), do: 1
   defp char_to_bit(_), do: 0
 
@@ -27,6 +33,8 @@ defmodule NaplpsWriter do
     buffer
   end
 
+  # Convert, 3 x and y bits at a time, the 9 bits of binary fraction into
+  # bytes. Each byte has two bits, 11, then three x bits then 3 y bits.
   defp mb_buildxy(buffer, xys) do
     [{xbit1, ybit1}, {xbit2, ybit2}, {xbit3, ybit3} | rest] = xys
 
@@ -34,13 +42,10 @@ defmodule NaplpsWriter do
     mb_buildxy(buffer <> xybyte, rest)
   end
 
-  def mb_xy_old(buffer, {x, y}) do
-    x_frac = Enum.map(prepend_sign(x, to_charlist(FractionConverter.decimal_to_binary_fraction(x))), &char_to_bit/1)
-    y_frac = Enum.map(prepend_sign(y, to_charlist(FractionConverter.decimal_to_binary_fraction(y))), &char_to_bit/1)
-
-    buffer <> mb_buildxy(<<>>, Enum.zip(x_frac, y_frac))
-  end
-
+  # Take a fraction, < 1, convert to a binary fraction as a string
+  # according to the conversion function. If the fraction is less than
+  # 0 then do a two's compliment on it and prepend a 1.
+  # Turn from a string into a list of bits for further processing
   def make_bits(fraction) do
     bitfrac = FractionConverter.decimal_to_binary_fraction(fraction)
 
@@ -54,19 +59,23 @@ defmodule NaplpsWriter do
     end
 
     Enum.map(prepend_sign(fraction, to_charlist(bitstext)), &char_to_bit/1)
-
   end
 
   def mb_xy(buffer, xys ) when is_list(xys) do
     pts_buffer = Enum.map(xys, fn xy -> mb_xy(<<>>, xy) end)
 
-    buffer <> Enum.reduce(pts_buffer, <<>>, &(&2 <> &1))
+    # buffer <> Enum.reduce(pts_buffer, <<>>, &(&2 <> &1))
+    buffer <> IO.iodata_to_binary(pts_buffer)
   end
 
+  # Build two lists, for x and y, of 9 bits consisting of a sign bit
+  # and a binary fraction of 8 bits. This will be stuffed into
+  # three bytes according to the NAPLPS spec.
   def mb_xy(buffer, {x, y}) do
     x_frac = make_bits(x)
     y_frac = make_bits(y)
 
+    # Break up the bits lists into a zipped list of tuples, then build the NAPLPS buffer
     buffer <> mb_buildxy(<<>>, Enum.zip(x_frac, y_frac))
   end
 
