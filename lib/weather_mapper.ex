@@ -58,7 +58,6 @@ defmodule WeatherMapper do
     {x_meters, y_meters} = Proj.from_lat_lng!({latitude, longitude}, equalarea())
     {meters_to_x(x_meters) / 256, meters_to_y(y_meters) / 256}
   end
-    # do: {longitude_to_x(longitude) / 256, latitude_to_y(latitude) / 256}
 
   # Round "down" temps, 63 -> 60, -15 -> -10. Used to set up basic weather temps
   defp temp_mod(temp) when temp < 0, do: -1 * temp_mod(abs(temp))
@@ -66,6 +65,7 @@ defmodule WeatherMapper do
   defp temp_mod(temp), do: trunc(temp) - rem(trunc(temp), 10)
 
   defp temp_to_text(temp), do: Integer.to_string(temp_mod(temp)) <> "s"
+
 
   def temp_to_gcutemp({location, temp}) do
     {geo_to_gcu(location), temp_to_text(temp)}
@@ -191,4 +191,80 @@ defmodule WeatherMapper do
         |> append_bytes([@cmd_texture_attr, @hatching_solid])
     end
   end
+
+  # For a list of NOAA XML url's get weather information. XML format.
+  # Get each XML in parallel, pass along only ones that come back :ok.
+  def get_weather_temps(temp_urls) do
+    temp_urls
+    |> Enum.map(&Task.async(fn -> get_temp_from_url(&1) end))
+    |> Enum.map(&Task.await/1)
+    |> Enum.filter(&is_ok/1)
+    |> Enum.map(&elem(&1, 1))
+  end
+
+  # Place the temperature text on the map.
+  def place_temp(buffer, {xy, temp}) do
+    buffer
+    |> draw_text_abs(temp, xy)
+  end
+
+  # Get each x, y, temperature from a NOAA URL, convert the text to the
+  # Prodigy temperature "range" (60s), write out the x & y.
+  def make_weather_temps(buffer, temp_urls) do
+    temp_buffer_list =
+      get_weather_temps(temp_urls)
+      |> Enum.map(&WeatherMapper.temp_to_gcutemp/1)
+      |> Enum.map(fn gcu_temp -> place_temp(<<>>, gcu_temp) end)
+
+    buffer <> IO.iodata_to_binary(temp_buffer_list)
+  end
+
+  # Read through the feature collection json and extract the high or low
+  # pressures. Convert the latitude & longitude to GCU x & y,
+  # filter to make sure it's within the continental US rectangle, and
+  # put it on the map.
+  def make_pressures(buffer, json, pressure_text, pressure_letter) do
+    pressures = Enum.filter(json["features"], &(&1["name"] == pressure_text))
+
+    pressure_coords =
+      Enum.map(pressures, fn pressure -> pressure["geometry"]["coordinates"] end)
+      |> Enum.map(&List.to_tuple/1)
+      |> Enum.map(&WeatherMapper.geo_to_gcu/1)
+      |> Enum.filter(&WeatherMapper.within_continental/1)
+
+    pressure_buffer =
+      Enum.map(pressure_coords, fn xy -> draw_text_abs(<<>>, pressure_letter, xy) end)
+      |> IO.iodata_to_binary()
+
+    buffer <> pressure_buffer
+  end
+
+  # Using a json body of NOAA "feature collections", draw polygons for selected weather features,
+  # then extract and display high and low pressure locations.
+  def make_fc_weather(buffer, fc_text) do
+    {:ok, fc_json} = Jason.decode(fc_text)
+
+    gcu_init(buffer)
+    |> append_byte(@cmd_shift_in)
+    |> WeatherMapper.draw_weather_poly(fc_json, "Rain", @color_black)
+    |> WeatherMapper.draw_weather_poly(fc_json, "Rain/Thunderstorms", @color_black)
+    |> WeatherMapper.draw_weather_poly(fc_json, "Rain/Snow", @color_black)
+    |> select_color(@color_blue)
+    |> make_pressures(fc_json, "high", "H")
+    |> select_color(@color_red)
+    |> make_pressures(fc_json, "low", "L")
+  end
+
+  # Write the text features from the NOAA XML temperatures, plus a headline.
+  def make_text(buffer, temp_urls) do
+    gcu_init(buffer)
+    |> text_attributes({6 / 256, 10 / 256})
+    |> select_color(@color_yellow)
+    |> make_weather_temps(temp_urls)
+    |> select_color(@color_white)
+    |> draw_text_abs("Prodigy Reloaded Today's Forecast", {80 / 256, 188 / 256})
+    |> draw(@cmd_set_point_rel, [])
+  end
+
+
 end
