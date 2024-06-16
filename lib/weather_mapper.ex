@@ -15,25 +15,28 @@ defmodule WeatherMapper do
 
   # The x's and y's from looking at an equal area (laea, epsg 2163) map and inputting the
   # latitude and longitude into Proj, getting the x and y back.
-  @west_2163            -2027511
-  @east_2163            2514264
-  @south_2163           -2102532
-  @north_2163           717248
+  @west_2163 -2_027_511
+  @east_2163 2_514_264
+  @south_2163 -2_102_532
+  @north_2163 717_248
 
   # the x' and y's from GCU, looking at the weather map in GCU and getting the x and y
   # from the cursor.
-  @min_x                36
-  @max_x                253
-  @min_y                53
-  @max_y                182
+  @min_x 36
+  @max_x 253
+  @min_y 53
+  @max_y 182
 
-  @min_x_range          36  / 256
-  @max_x_range          253 / 256
-  @min_y_range          53  / 256
-  @max_y_range          182 / 256
+  @min_x_range 36 / 256
+  @max_x_range 253 / 256
+  @min_y_range 53 / 256
+  @max_y_range 182 / 256
 
-  @x_factor             (@max_x - @min_x) / (@east_2163 - @west_2163)
-  @y_factor             (@max_y - @min_y) / (@north_2163 - @south_2163)
+  @x_factor (@max_x - @min_x) / (@east_2163 - @west_2163)
+  @y_factor (@max_y - @min_y) / (@north_2163 - @south_2163)
+
+  @rain_features ["Rain", "Rain/Thunderstorms", "Heavy Rain/Flash Flooding Possible"]
+  @snow_features ["Rain/Snow", "Snow"]
 
   defp meters_to_x(meters), do: (meters - @west_2163) * @x_factor + @min_x
 
@@ -41,9 +44,9 @@ defmodule WeatherMapper do
 
   def within_continental({x, y}) do
     x >= @min_x_range &&
-    x <= @max_x_range &&
-    y >= @min_y_range &&
-    y <= @max_y_range
+      x <= @max_x_range &&
+      y >= @min_y_range &&
+      y <= @max_y_range
   end
 
   defp equalarea() do
@@ -65,7 +68,6 @@ defmodule WeatherMapper do
   defp temp_mod(temp), do: trunc(temp) - rem(trunc(temp), 10)
 
   defp temp_to_text(temp), do: Integer.to_string(temp_mod(temp)) <> "s"
-
 
   def temp_to_gcutemp({location, temp}) do
     {geo_to_gcu(location), temp_to_text(temp)}
@@ -115,6 +117,42 @@ defmodule WeatherMapper do
   def get_temp_from_url(url) do
     get_location_temp(&HTTPoison.get/1, url)
   end
+
+  # See if a feature collection json has a particular feature.
+  # Each feature has json data but will have empty coordinates if the feature isn't
+  # in today's weather.
+  def has_feature(fc_json, feature) do
+    feature = Enum.filter(fc_json["features"], &(&1["name"] == feature)) |> Enum.at(0)
+    case feature do
+      nil -> false
+      _ -> (feature["geometry"]["coordinates"] |> Enum.at(0) |> length) > 0
+    end
+  end
+
+  # Draw a legend rectangle for rain or snow
+  def add_rain_legend(buffer, lower_y) do
+    add_legend(buffer, "Rain", @color_black, lower_y)
+  end
+
+  def add_snow_legend(buffer, lower_y) do
+    add_legend(buffer, "Snow", @color_white, lower_y)
+  end
+
+  def add_legend(buffer, _label, _legend_color, lower_y) when lower_y < 0, do: buffer
+
+  def add_legend(buffer, label, legend_color, lower_y) do
+    buffer
+    |> select_color(@color_gray)
+    |> append_bytes([@cmd_texture_attr, @hatching_solid])
+    |> draw(@cmd_set_rect_filled, [{0, lower_y / 256}, {31 / 256, 27 / 256}])
+    |> select_color(legend_color)
+    |> append_bytes([@cmd_texture_attr, @hatching_vertical])
+    |> draw(@cmd_set_rect_filled, [{2 / 256, (lower_y + 12) / 256}, {23 / 256, 11 / 256}])
+    |> draw(@cmd_set_rect_outlined, [{2 / 256, (lower_y + 12) / 256}, {23 / 256, 11 / 256}])
+    |> draw_text_abs(label, [{3 / 256, (lower_y + 2) / 256}])
+  end
+
+
 
   # Take NOAA temperature XML to get a longitude, latitude and temperature in fahrenheit
   def get_location_temp(get_fn, get_text) do
@@ -171,12 +209,14 @@ defmodule WeatherMapper do
   # Draw hatching in the color specified.
   def draw_weather_poly(buffer, json, feature_text, color) do
     feature = Enum.filter(json["features"], &(&1["name"] == feature_text)) |> Enum.at(0)
-    feature_polys = feature["geometry"]["coordinates"] |> Enum.at(0)
+    feature_polys = case feature do
+      nil -> []
+      _ -> feature["geometry"]["coordinates"] |> Enum.at(0)
+    end
 
     case feature_polys do
       [] ->
         buffer
-
       _ ->
         gcu_polys = Enum.map(feature_polys, &convert_poly/1)
 
@@ -244,15 +284,29 @@ defmodule WeatherMapper do
   def make_fc_weather(buffer, fc_text) do
     {:ok, fc_json} = Jason.decode(fc_text)
 
+    has_rain_feature = Enum.any?(@rain_features, fn x -> has_feature(fc_json, x) end)
+    has_snow_feature = Enum.any?(@snow_features, fn x -> has_feature(fc_json, x) end)
+
+    {rain_y, snow_y} = case {has_rain_feature, has_snow_feature} do
+      {false, false} -> {-1, -1}
+      {true, false} -> {54, -1}
+      {false, true} -> {-1, 54}
+      {true, true} -> {54, 81}
+    end
+
     gcu_init(buffer)
     |> append_byte(@cmd_shift_in)
     |> WeatherMapper.draw_weather_poly(fc_json, "Rain", @color_black)
     |> WeatherMapper.draw_weather_poly(fc_json, "Rain/Thunderstorms", @color_black)
-    |> WeatherMapper.draw_weather_poly(fc_json, "Rain/Snow", @color_black)
+    |> WeatherMapper.draw_weather_poly(fc_json, "Heavy Rain/Flash Flooding Possible", @color_black)
+    |> WeatherMapper.draw_weather_poly(fc_json, "Rain/Snow", @color_white)
+    |> WeatherMapper.draw_weather_poly(fc_json, "Snow", @color_white)
     |> select_color(@color_blue)
     |> make_pressures(fc_json, "high", "H")
     |> select_color(@color_red)
     |> make_pressures(fc_json, "low", "L")
+    |> add_rain_legend(rain_y)
+    |> add_snow_legend(snow_y)
   end
 
   # Write the text features from the NOAA XML temperatures, plus a headline.
@@ -265,6 +319,4 @@ defmodule WeatherMapper do
     |> draw_text_abs("Prodigy Reloaded Today's Forecast", {80 / 256, 188 / 256})
     |> draw(@cmd_set_point_rel, [])
   end
-
-
 end
