@@ -38,6 +38,9 @@ defmodule WeatherMapper do
   @rain_features ["Rain", "Rain/Thunderstorms", "Heavy Rain/Flash Flooding Possible"]
   @snow_features ["Rain/Snow", "Snow"]
 
+  @text_width 6
+  @text_height 10
+
   defp meters_to_x(meters), do: (meters - @west_2163) * @x_factor + @min_x
 
   defp meters_to_y(meters), do: (meters - @south_2163) * @y_factor + @min_y
@@ -232,6 +235,16 @@ defmodule WeatherMapper do
     end
   end
 
+  # Take a list of features and add the weather polygons for each one,
+  # drawn in the appropriate color. Join the polygons together.
+  def draw_weather_features(buffer, json, feature_list, color) do
+    feature_bufs = Enum.map(feature_list, fn feature ->
+      draw_weather_poly(<<>>, json, feature, color)
+    end)
+    |> IO.iodata_to_binary()
+    buffer <> feature_bufs
+  end
+
   # For a list of NOAA XML url's get weather information. XML format.
   # Get each XML in parallel, pass along only ones that come back :ok.
   def get_weather_temps(temp_urls) do
@@ -264,12 +277,17 @@ defmodule WeatherMapper do
   # filter to make sure it's within the continental US rectangle, and
   # put it on the map.
   def make_pressures(buffer, json, pressure_text, pressure_letter) do
+    width_center = (@text_width / 2) / 256
+    height_center = (@text_height / 2) / 256
+
     pressures = Enum.filter(json["features"], &(&1["name"] == pressure_text))
 
     pressure_coords =
       Enum.map(pressures, fn pressure -> pressure["geometry"]["coordinates"] end)
       |> Enum.map(&List.to_tuple/1)
       |> Enum.map(&WeatherMapper.geo_to_gcu/1)
+      # Put the x,y as the center of the text, width is 6, height is 10
+      |> Enum.map(fn {x, y} -> {x - width_center, y - height_center} end)
       |> Enum.filter(&WeatherMapper.within_continental/1)
 
     pressure_buffer =
@@ -296,11 +314,8 @@ defmodule WeatherMapper do
 
     gcu_init(buffer)
     |> append_byte(@cmd_shift_in)
-    |> WeatherMapper.draw_weather_poly(fc_json, "Rain", @color_black)
-    |> WeatherMapper.draw_weather_poly(fc_json, "Rain/Thunderstorms", @color_black)
-    |> WeatherMapper.draw_weather_poly(fc_json, "Heavy Rain/Flash Flooding Possible", @color_black)
-    |> WeatherMapper.draw_weather_poly(fc_json, "Rain/Snow", @color_white)
-    |> WeatherMapper.draw_weather_poly(fc_json, "Snow", @color_white)
+    |> draw_weather_features(fc_json, @rain_features, @color_black)
+    |> draw_weather_features(fc_json, @snow_features, @color_white)
     |> select_color(@color_blue)
     |> make_pressures(fc_json, "high", "H")
     |> select_color(@color_red)
@@ -312,7 +327,7 @@ defmodule WeatherMapper do
   # Write the text features from the NOAA XML temperatures, plus a headline.
   def make_text(buffer, temp_urls) do
     gcu_init(buffer)
-    |> text_attributes({6 / 256, 10 / 256})
+    |> text_attributes({@text_width / 256, @text_height / 256})
     |> select_color(@color_yellow)
     |> make_weather_temps(temp_urls)
     |> select_color(@color_white)
