@@ -1,5 +1,4 @@
 defmodule Header do
-
   defstruct [
     :object_name,
     :object_ext,
@@ -13,18 +12,32 @@ defmodule Header do
     :object_list
   ]
 
+  @type t :: %__MODULE__{
+    object_name: binary(),
+    object_ext: binary(),
+    sequence: non_neg_integer(),
+    object_type: ObjectTypes.object_type(),
+    object_module: any(),
+    length: non_neg_integer(),
+    candicacy_version_high: non_neg_integer(),
+    num_objects: non_neg_integer(),
+    candidacy_version_low: non_neg_integer(),
+    object_list: list(binary())
+  }
+
+  @spec new(binary(), binary(), ObjectTypes.object_type(), list(binary())) :: Header.t()
   def new(object_name, object_ext, object_type, object_list) do
     %Header{
       object_name: object_name,
       object_ext: object_ext,
       sequence: 1,
       object_type: object_type,
+      object_module: nil,
       candicacy_version_high: 0,
       num_objects: length(object_list),
       candidacy_version_low: 1,
       object_list: object_list
     }
-
   end
 
   # The length of all the static parts of the header
