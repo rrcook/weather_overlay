@@ -1,0 +1,65 @@
+{
+    "regions": [
+        {
+            "region": [
+                "https://forecast.weather.gov/xml/current_obs/KATL.xml",
+                "https://forecast.weather.gov/xml/current_obs/KFBG.xml",
+                "https://forecast.weather.gov/xml/current_obs/KINT.xml",
+                "https://forecast.weather.gov/xml/current_obs/KBFM.xml",
+                "https://forecast.weather.gov/xml/current_obs/KDED.xml",
+                "https://forecast.weather.gov/xml/current_obs/KGYH.xml",
+                "https://forecast.weather.gov/xml/current_obs/KMSL.xml",
+                "https://forecast.weather.gov/xml/current_obs/KCHA.xml"
+            ]
+        },
+        {
+            "region": [
+                "https://forecast.weather.gov/xml/current_obs/KADS.xml",
+                "https://forecast.weather.gov/xml/current_obs/KGVW.xml",
+                "https://forecast.weather.gov/xml/current_obs/KTUS.xml",
+                "https://forecast.weather.gov/xml/current_obs/KSLC.xml",
+                "https://forecast.weather.gov/xml/current_obs/KCLL.xml",
+                "https://forecast.weather.gov/xml/current_obs/KVGT.xml",
+                "https://forecast.weather.gov/xml/current_obs/KLAX.xml",
+                "https://forecast.weather.gov/xml/current_obs/KMCC.xml"
+            ]
+        },
+        {
+            "region": [
+                "https://forecast.weather.gov/xml/current_obs/KSEA.xml",
+                "https://forecast.weather.gov/xml/current_obs/KBOI.xml",
+                "https://forecast.weather.gov/xml/current_obs/KBTM.xml",
+                "https://forecast.weather.gov/xml/current_obs/KPIR.xml",
+                "https://forecast.weather.gov/xml/current_obs/KOMA.xml",
+                "https://forecast.weather.gov/xml/current_obs/KPOY.xml",
+                "https://forecast.weather.gov/xml/current_obs/KANE.xml",
+                "https://forecast.weather.gov/xml/current_obs/KAPA.xml"
+            ]
+        },
+        {
+            "region": [
+                "https://forecast.weather.gov/xml/current_obs/KMCI.xml",
+                "https://forecast.weather.gov/xml/current_obs/KOSU.xml",
+                "https://forecast.weather.gov/xml/current_obs/KMSN.xml",
+                "https://forecast.weather.gov/xml/current_obs/KMDW.xml",
+                "https://forecast.weather.gov/xml/current_obs/KAAA.xml",
+                "https://forecast.weather.gov/xml/current_obs/KDTW.xml",
+                "https://forecast.weather.gov/xml/current_obs/KAZO.xml",
+                "https://forecast.weather.gov/xml/current_obs/KCGF.xml"
+            ]
+        },
+        {
+            "region": [
+                "https://forecast.weather.gov/xml/current_obs/KPWM.xml",
+                "https://forecast.weather.gov/xml/current_obs/KBUF.xml",
+                "https://forecast.weather.gov/xml/current_obs/KNYC.xml",
+                "https://forecast.weather.gov/xml/current_obs/KPNE.xml",
+                "https://forecast.weather.gov/xml/current_obs/KPIT.xml",
+                "https://forecast.weather.gov/xml/current_obs/KBOS.xml",
+                "https://forecast.weather.gov/xml/current_obs/KPYM.xml",
+                "https://forecast.weather.gov/xml/current_obs/KCRW.xml"
+            ]
+        }
+    ],
+    "feature_collection": "https://www.wpc.ncep.noaa.gov/NationalForecastChart/featurecollections/fc_1.json"
+}

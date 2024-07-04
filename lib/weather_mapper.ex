@@ -126,9 +126,10 @@ defmodule WeatherMapper do
   # in today's weather.
   def has_feature(fc_json, feature) do
     feature = Enum.filter(fc_json["features"], &(&1["name"] == feature)) |> Enum.at(0)
+
     case feature do
       nil -> false
-      _ -> (feature["geometry"]["coordinates"] |> Enum.at(0) |> length) > 0
+      _ -> feature["geometry"]["coordinates"] |> Enum.at(0) |> length > 0
     end
   end
 
@@ -154,8 +155,6 @@ defmodule WeatherMapper do
     |> draw(@cmd_set_rect_outlined, [{2 / 256, (lower_y + 12) / 256}, {23 / 256, 11 / 256}])
     |> draw_text_abs(label, [{3 / 256, (lower_y + 2) / 256}])
   end
-
-
 
   # Take NOAA temperature XML to get a longitude, latitude and temperature in fahrenheit
   def get_location_temp(get_fn, get_text) do
@@ -190,13 +189,13 @@ defmodule WeatherMapper do
       poly
       |> Enum.map(&List.to_tuple/1)
       |> Enum.map(&geo_to_gcu/1)
-      |> IO.inspect()
+      # |> IO.inspect()
       |> Enum.unzip()
 
     {diff_xs, diff_ys} = {diff_list(xs), diff_list(ys)}
 
     Enum.zip(diff_xs, diff_ys)
-    |> IO.inspect()
+    # |> IO.inspect()
   end
 
   # Draw a polygon and properly terminate it in the GCU style.
@@ -212,14 +211,17 @@ defmodule WeatherMapper do
   # Draw hatching in the color specified.
   def draw_weather_poly(buffer, json, feature_text, color) do
     feature = Enum.filter(json["features"], &(&1["name"] == feature_text)) |> Enum.at(0)
-    feature_polys = case feature do
-      nil -> []
-      _ -> feature["geometry"]["coordinates"] |> Enum.at(0)
-    end
+
+    feature_polys =
+      case feature do
+        nil -> []
+        _ -> feature["geometry"]["coordinates"] |> Enum.at(0)
+      end
 
     case feature_polys do
       [] ->
         buffer
+
       _ ->
         gcu_polys = Enum.map(feature_polys, &convert_poly/1)
 
@@ -238,10 +240,12 @@ defmodule WeatherMapper do
   # Take a list of features and add the weather polygons for each one,
   # drawn in the appropriate color. Join the polygons together.
   def draw_weather_features(buffer, json, feature_list, color) do
-    feature_bufs = Enum.map(feature_list, fn feature ->
-      draw_weather_poly(<<>>, json, feature, color)
-    end)
-    |> IO.iodata_to_binary()
+    feature_bufs =
+      Enum.map(feature_list, fn feature ->
+        draw_weather_poly(<<>>, json, feature, color)
+      end)
+      |> IO.iodata_to_binary()
+
     buffer <> feature_bufs
   end
 
@@ -277,8 +281,8 @@ defmodule WeatherMapper do
   # filter to make sure it's within the continental US rectangle, and
   # put it on the map.
   def make_pressures(buffer, json, pressure_text, pressure_letter) do
-    width_center = (@text_width / 2) / 256
-    height_center = (@text_height / 2) / 256
+    width_center = @text_width / 2 / 256
+    height_center = @text_height / 2 / 256
 
     pressures = Enum.filter(json["features"], &(&1["name"] == pressure_text))
 
@@ -299,18 +303,17 @@ defmodule WeatherMapper do
 
   # Using a json body of NOAA "feature collections", draw polygons for selected weather features,
   # then extract and display high and low pressure locations.
-  def make_fc_weather(buffer, fc_text) do
-    {:ok, fc_json} = Jason.decode(fc_text)
-
+  def make_fc_weather(buffer, fc_json) do
     has_rain_feature = Enum.any?(@rain_features, fn x -> has_feature(fc_json, x) end)
     has_snow_feature = Enum.any?(@snow_features, fn x -> has_feature(fc_json, x) end)
 
-    {rain_y, snow_y} = case {has_rain_feature, has_snow_feature} do
-      {false, false} -> {-1, -1}
-      {true, false} -> {54, -1}
-      {false, true} -> {-1, 54}
-      {true, true} -> {54, 81}
-    end
+    {rain_y, snow_y} =
+      case {has_rain_feature, has_snow_feature} do
+        {false, false} -> {-1, -1}
+        {true, false} -> {54, -1}
+        {false, true} -> {-1, 54}
+        {true, true} -> {54, 81}
+      end
 
     gcu_init(buffer)
     |> append_byte(@cmd_shift_in)
@@ -324,6 +327,24 @@ defmodule WeatherMapper do
     |> add_snow_legend(snow_y)
   end
 
+  def get_temps_from_file() do
+    file_location = __DIR__ <> "/../assets/temp_stations.json"
+    # IO.inspect(file_location)
+
+    _buffer =
+      case File.read(file_location) do
+        {:ok, buffer} -> buffer
+        {:error, _err} -> ""
+      end
+
+    # get_temp_urls(buffer)
+  end
+
+  def get_temps_from_json(weather_json) do
+    Enum.map(weather_json["regions"], fn r -> Enum.shuffle(r["region"]) |> Enum.take(2) end)
+    |> Enum.flat_map(& &1)
+  end
+
   # Write the text features from the NOAA XML temperatures, plus a headline.
   def make_text(buffer, temp_urls) do
     gcu_init(buffer)
@@ -333,5 +354,47 @@ defmodule WeatherMapper do
     |> select_color(@color_white)
     |> draw_text_abs("Prodigy Reloaded Today's Forecast", {80 / 256, 188 / 256})
     |> draw(@cmd_set_point_rel, [])
+  end
+
+  def make_weather_overlay() do
+    file_location = __DIR__ <> "/../assets/temp_stations.json"
+
+    {weather_json, feature_collection_json} =
+      with {:ok, buffer} <- File.read(file_location),
+           {:ok, w_json} <- Jason.decode(buffer),
+           {:ok, response} <- HTTPoison.get(w_json["feature_collection"]),
+           fc_buffer = response.body,
+           {:ok, fc_json} <- Jason.decode(fc_buffer) do
+        {w_json, fc_json}
+      else
+        err ->
+          IO.inspect(err)
+          nil
+      end
+
+    if weather_json do
+      # IO.inspect(weather_json)
+      pd_buffer =
+        make_fc_weather(<<>>, feature_collection_json)
+        |> make_text(get_temps_from_json(weather_json))
+
+      File.write!("/Users/rrc/prodigy/C/RAIN.NAP", pd_buffer)
+      pd_seg = PresentationData.new(:presentation_data_naplps, pd_buffer)
+      header = Header.new("WM00A000", "B", :page_element_object, [pd_seg])
+      buffer = ObjectEncoder.encode(header)
+      File.write!("/Users/rrc/prodigy/C/WMB.BDY", buffer)
+    else
+      IO.puts("No changes at this time.")
+    end
+
+  end
+
+  def run() do
+    IO.puts("Ran it!")
+  end
+
+  def main(_args) do
+    run()
+    exit(:shudown)
   end
 end
