@@ -328,7 +328,7 @@ defmodule WeatherMapper do
   end
 
   def get_temps_from_file() do
-    file_location = __DIR__ <> "/../assets/temp_stations.json"
+    file_location = __DIR__ <> "/../assets/station_info.json"
     # IO.inspect(file_location)
 
     _buffer =
@@ -357,7 +357,8 @@ defmodule WeatherMapper do
   end
 
   def make_weather_overlay() do
-    file_location = __DIR__ <> "/../assets/temp_stations.json"
+    file_location = __DIR__ <> "/../assets/station_info.json"
+    output_path = __DIR__ <> "/../output/"
 
     {weather_json, feature_collection_json} =
       with {:ok, buffer} <- File.read(file_location),
@@ -378,23 +379,14 @@ defmodule WeatherMapper do
         make_fc_weather(<<>>, feature_collection_json)
         |> make_text(get_temps_from_json(weather_json))
 
-      File.write!("/Users/rrc/prodigy/C/RAIN.NAP", pd_buffer)
+      File.write!(output_path <> "RAIN.NAP", pd_buffer)
       pd_seg = PresentationData.new(:presentation_data_naplps, pd_buffer)
       header = Header.new("WM00A000", "B", :page_element_object, [pd_seg])
       buffer = ObjectEncoder.encode(header)
-      File.write!("/Users/rrc/prodigy/C/WMB.BDY", buffer)
+      File.write!(output_path <> "WM00A000.B_1_8_1", buffer)
     else
       IO.puts("No changes at this time.")
     end
 
-  end
-
-  def run() do
-    IO.puts("Ran it!")
-  end
-
-  def main(_args) do
-    run()
-    exit(:shudown)
   end
 end
