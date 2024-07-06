@@ -24,3 +24,6 @@ naplps_writer-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+
+# Where the output files, NAPLPS and Presentation Data objects, will be written
+/output/
