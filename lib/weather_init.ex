@@ -7,6 +7,8 @@ defmodule WeatherInit do
     {:ok, proj} = Proj.from_epsg(2163)
     :ets.insert(:weather, {:equal_area, proj})
 
+    WeatherMapper.make_weather_overlay()
+
     children = []
     Supervisor.start_link(children, strategy: :one_for_one)
   end
