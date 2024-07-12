@@ -14,6 +14,7 @@
 # see <https://www.gnu.org/licenses/>.
 
 defmodule WeatherMapper do
+  require Logger
   import NaplpsWriter
   use NaplpsConstants
 
@@ -172,6 +173,7 @@ defmodule WeatherMapper do
   end
 
   # Take NOAA temperature XML to get a longitude, latitude and temperature in fahrenheit
+  @spec get_location_temp((any() -> any()), any()) :: any()
   def get_location_temp(get_fn, get_text) do
     with {:ok, response} <- get_fn.(get_text),
          {:ok, 200} <- status_check(response.status_code),
@@ -181,7 +183,9 @@ defmodule WeatherMapper do
          {:ok, temp_f} <- nil_check(w_map["current_observation"]["#content"]["temp_f"]) do
       {:ok, {{String.to_float(longitude), String.to_float(latitude)}, String.to_float(temp_f)}}
     else
-      err -> err
+      err ->
+      Logger.warning("Problem retrieving temperature for #{get_text}, #{inspect(err)}")
+      err
     end
   end
 
@@ -342,22 +346,9 @@ defmodule WeatherMapper do
     |> add_snow_legend(snow_y)
   end
 
-  def get_temps_from_file() do
-    file_location = __DIR__ <> "/../assets/station_info.json"
-    # IO.inspect(file_location)
-
-    _buffer =
-      case File.read(file_location) do
-        {:ok, buffer} -> buffer
-        {:error, _err} -> ""
-      end
-
-    # get_temp_urls(buffer)
-  end
-
   def get_temps_from_json(weather_json) do
     Enum.map(weather_json["regions"], fn r -> Enum.shuffle(r["region"]) |> Enum.take(2) end)
-    |> Enum.flat_map(& &1)
+    |> Enum.flat_map(&Function.identity/1)
   end
 
   # Write the text features from the NOAA XML temperatures, plus a headline.
@@ -379,21 +370,21 @@ defmodule WeatherMapper do
       with {:ok, buffer} <- File.read(file_location),
            {:ok, w_json} <- Jason.decode(buffer),
            {:ok, response} <- HTTPoison.get(w_json["feature_collection"]),
-           fc_buffer = response.body,
-           {:ok, fc_json} <- Jason.decode(fc_buffer) do
+           {:ok, fc_json} <- Jason.decode(response.body) do
         {w_json, fc_json}
       else
         err ->
-          IO.inspect(err)
+          Logger.warning("Problem retrieving weather features #{inspect(err)}")
           nil
       end
 
     if weather_json do
-      # IO.inspect(weather_json)
+      Logger.debug("Creating NAPLPS buffer")
       pd_buffer =
         make_fc_weather(<<>>, feature_collection_json)
         |> make_text(get_temps_from_json(weather_json))
 
+      Logger.debug("Writing NAPLPS and presentation to output directory.")
       File.write!(output_path <> "RAIN.NAP", pd_buffer)
       pd_seg = PresentationData.new(:presentation_data_naplps, pd_buffer)
       header = Header.new("WM00A000", "B", :page_element_object, [pd_seg])
