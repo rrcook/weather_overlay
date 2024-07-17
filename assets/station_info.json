@@ -50,7 +50,7 @@
         },
         {
             "region": [
-                "https://forecast.weather.gov/xml/current_obs/KPWM.xml",
+                "https://forecast.weather.gov/xml/current_obs/KBTV.xml",
                 "https://forecast.weather.gov/xml/current_obs/KBUF.xml",
                 "https://forecast.weather.gov/xml/current_obs/KNYC.xml",
                 "https://forecast.weather.gov/xml/current_obs/KPNE.xml",
