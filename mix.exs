@@ -25,7 +25,8 @@ defmodule NaplpsWriter.MixProject do
       {:jason, "~> 1.4"},
       {:httpoison, "~> 1.8.2"},
       {:elixir_xml_to_map, "~> 3.1"},
-      {:proj, "~> 0.2.3"}
+      {:proj, "~> 0.2.3"},
+      {:prodigy_objects, git: "https://github.com/rrcook/prodigy_objects.git"}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]
