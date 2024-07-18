@@ -51,8 +51,8 @@ defmodule WeatherMapper do
   @x_factor (@max_x - @min_x) / (@east_2163 - @west_2163)
   @y_factor (@max_y - @min_y) / (@north_2163 - @south_2163)
 
-  @rain_features ["Rain", "Rain/Thunderstorms", "Heavy Rain/Flash Flooding Possible"]
-  @snow_features ["Rain/Snow", "Snow"]
+  @rain_features ["Rain", "Rain/Thunderstorms", "Heavy Rain/Flash Flooding Possible", "Severe Thunderstorms Possible"]
+  @snow_features ["Rain/Snow", "Snow", "Heavy Snow Possible"]
 
   @text_width 6
   @text_height 10
@@ -366,6 +366,10 @@ defmodule WeatherMapper do
     file_location = __DIR__ <> "/../assets/station_info.json"
     output_path = __DIR__ <> "/../output/"
 
+    # Make sure the directory is there. File.mkdir will return :ok or :error, it
+    # doesn't matter so we don't check.
+    File.mkdir(output_path)
+
     {weather_json, feature_collection_json} =
       with {:ok, buffer} <- File.read(file_location),
            {:ok, w_json} <- Jason.decode(buffer),
@@ -385,7 +389,8 @@ defmodule WeatherMapper do
         |> make_text(get_temps_from_json(weather_json))
 
       Logger.debug("Writing NAPLPS and presentation to output directory.")
-      File.write!(output_path <> "RAIN.NAP", pd_buffer)
+      # WO is Weather Overlay
+      File.write!(output_path <> "WO.NAP", pd_buffer)
       pd_seg = PresentationData.new(:presentation_data_naplps, pd_buffer)
       header = Header.new("WM00A000", "B", :page_element_object, [pd_seg])
       buffer = ObjectEncoder.encode(header)
