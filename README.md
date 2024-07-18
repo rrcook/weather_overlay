@@ -1,6 +1,11 @@
-# NaplpsWriter
+# Weather Overlay
 
 **Prodigy-style weather map in NAPLPS**
+
+An Elixir application that will write a "weather overlay" that changes daily over
+a map of the continental United States. 
+The application produces a NAPLPS graphics file used in Prodigy, overlaid on top 
+of a separate NAPLPS graphic.
 
 ## Installation
 
