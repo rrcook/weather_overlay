@@ -1,9 +1,9 @@
-defmodule NaplpsWriter.MixProject do
+defmodule WeatherOverlay.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :naplps_writer,
+      app: :weather_overlay,
       version: "0.1.0",
       elixir: "~> 1.16",
       start_permanent: Mix.env() == :prod,
@@ -26,7 +26,8 @@ defmodule NaplpsWriter.MixProject do
       {:httpoison, "~> 1.8.2"},
       {:elixir_xml_to_map, "~> 3.1"},
       {:proj, "~> 0.2.3"},
-      {:prodigy_objects, git: "https://github.com/rrcook/prodigy_objects.git"}
+      {:prodigy_objects, git: "https://github.com/rrcook/prodigy_objects.git"},
+      {:naplps_writer, git: "https://github.com/rrcook/naplps_writer.git"}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]
