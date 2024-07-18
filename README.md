@@ -15,7 +15,7 @@ by adding `naplps_writer` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:naplps_writer, "~> 0.1.0"}
+    {:weather_overlay, "~> 0.1.0"}
   ]
 end
 ```
