@@ -5,7 +5,7 @@ defmodule WeatherOverlay.MixProject do
     [
       app: :weather_overlay,
       version: "0.1.0",
-      elixir: "~> 1.16",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       deps: deps()
     ]
@@ -14,8 +14,7 @@ defmodule WeatherOverlay.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger],
-      mod: {WeatherInit, []}
+      extra_applications: [:logger]
     ]
   end
 
