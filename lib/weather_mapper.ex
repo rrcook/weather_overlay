@@ -1,4 +1,4 @@
-# Copyright 2024, Ralph Richard Cook
+# Copyright 2024,2025,2026 Ralph Richard Cook
 #
 # This file is part of Prodigy Reloaded.
 #
@@ -43,6 +43,8 @@ defmodule WeatherMapper do
   @min_y 53
   @max_y 182
 
+  @max_temp_x 240 / 256
+
   @min_x_range 36 / 256
   @max_x_range 253 / 256
   @min_y_range 53 / 256
@@ -52,6 +54,11 @@ defmodule WeatherMapper do
   @y_factor (@max_y - @min_y) / (@north_2163 - @south_2163)
 
   @rain_features ["Rain", "Rain/Thunderstorms", "Heavy Rain/Flash Flooding Possible", "Severe Thunderstorms Possible"]
+  @wo_fn_map %{
+    "Severe Thunderstorms Possible" => &WeatherObjects.draw_lightning/2
+  }
+
+  @cloud_features ["Cloudy", "Partly Cloudy", "Mostly Cloudy"]
   @snow_features ["Rain/Snow", "Snow", "Heavy Snow Possible"]
 
   @text_width 6
@@ -225,6 +232,43 @@ defmodule WeatherMapper do
     |> draw(@cmd_set_point_rel, [])
   end
 
+  # Not your average average function!
+  # The input list has the starting point at the head, then the rest of
+  # the values are delta from the previous accumulated values.
+  # This is what GCU and Prodigy expects for the NAPLPS commands x, y values.
+  # This means to get the average of the absolute values we need to keep track
+  # of the accumulated values as we go along. This function calculates the
+  # sum of those values so far and the count, then uses that to get the average.
+  def avg_delta(list) do
+    {sum, count, _acc} =
+      Enum.reduce(list, {0, 0, [0]}, fn x, {acc_sum, acc_count, acc_list} ->
+        {acc_sum + x + hd(acc_list), acc_count + 1, [x + hd(acc_list) | acc_list]}
+      end)
+    sum / count
+  end
+
+  # This function sees if there is a corresponding weather object to draw for the
+  # weather feature we're interested in
+  # Recieves a list of lists, where the inner list is a list of {x, y}
+  # to find the "center" we get an average of the x's and y's, then draw
+  # our weather object there.
+  # The weather objects would be put at the end so they're on top, so I'm saving them
+  # in the Process dictionary until it's time to add them
+  def save_weather_objects(feature_text, gcu_polys) do
+    wo_fn = Map.get(@wo_fn_map, feature_text)
+
+    case wo_fn do
+      nil -> :ok
+      _ ->
+        Enum.each(gcu_polys, fn poly_list ->
+          {xs, ys} = Enum.unzip(poly_list)
+          wo_buffer = wo_fn.(<<>>, {avg_delta(xs), avg_delta(ys)})
+          wos = Process.get(:wo, [])
+          Process.put(:wo, [wo_buffer | wos])
+        end)
+    end
+  end
+
   # Use the NOAA feature collection specified in json to get the desired feature.
   # Extract the polygon for the feature passed in as feature_text
   # Draw hatching in the color specified.
@@ -243,6 +287,7 @@ defmodule WeatherMapper do
 
       _ ->
         gcu_polys = Enum.map(feature_polys, &convert_poly/1)
+        save_weather_objects(feature_text, gcu_polys)
 
         drawn_polys =
           Enum.map(gcu_polys, &draw_one_poly(<<>>, &1))
@@ -280,8 +325,16 @@ defmodule WeatherMapper do
 
   # Place the temperature text on the map.
   def place_temp(buffer, {xy, temp}) do
+    {original_x, original_y} = xy
+    # make sure the temp doesn't go off the right edge of the map, move it slightly left if necessary
+    draw_x =
+      if original_x > @max_temp_x do
+        @max_temp_x
+      else
+        original_x
+      end
     buffer
-    |> draw_text_abs(temp, xy)
+    |> draw_text_abs(temp, {draw_x, original_y})
   end
 
   # Get each x, y, temperature from a NOAA URL, convert the text to the
@@ -334,8 +387,9 @@ defmodule WeatherMapper do
         {true, true} -> {54, 81}
       end
 
-    gcu_init(buffer)
+    weather_buffer = gcu_init(buffer)
     |> append_byte(@cmd_shift_in)
+    # These two calls could potentionally add weather objects to our Process dictionary
     |> draw_weather_features(fc_json, @rain_features, @color_black)
     |> draw_weather_features(fc_json, @snow_features, @color_white)
     |> select_color(@color_blue)
@@ -344,6 +398,9 @@ defmodule WeatherMapper do
     |> make_pressures(fc_json, "low", "L")
     |> add_rain_legend(rain_y)
     |> add_snow_legend(snow_y)
+
+    wos = Process.get(:wo, [])
+    weather_buffer <> IO.iodata_to_binary(wos)
   end
 
   def get_temps_from_json(weather_json) do
