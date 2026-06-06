@@ -58,7 +58,8 @@ defmodule WeatherMapper do
     "Severe Thunderstorms Possible" => &WeatherObjects.draw_lightning/2
   }
 
-  @cloud_features ["Cloudy", "Partly Cloudy", "Mostly Cloudy"]
+  # Cloud features may be used later.
+  # @cloud_features ["Cloudy", "Partly Cloudy", "Mostly Cloudy"]
   @snow_features ["Rain/Snow", "Snow", "Heavy Snow Possible"]
 
   @text_width 6
