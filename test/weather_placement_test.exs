@@ -140,4 +140,69 @@ defmodule WeatherPlacementTest do
     placed = WeatherPlacement.resolve_collisions(blockers ++ [callout(121, 121, 9)])
     refute Enum.any?(placed, &(&1.priority == 9))
   end
+  # ---- kmeans / temp communities -------------------------------------
+
+  defp tpoint(x, y, temp), do: %{x: x, y: y, temp: temp}
+
+  test "kmeans separates two obvious blobs deterministically" do
+    blob_a = for i <- 0..9, do: tpoint(60 + rem(i, 3) * 4, 100 + div(i, 3) * 4, 62)
+    blob_b = for i <- 0..9, do: tpoint(200 + rem(i, 3) * 4, 140 + div(i, 3) * 4, 84)
+    points = blob_a ++ blob_b
+
+    clusters = WeatherPlacement.kmeans(points, 2)
+    assert length(clusters) == 2
+    assert WeatherPlacement.kmeans(points, 2) == clusters
+
+    sizes = clusters |> Enum.map(&length/1) |> Enum.sort()
+    assert sizes == [10, 10]
+  end
+
+  test "temp_communities labels each community with its modal decade" do
+    cool = for i <- 0..7, do: tpoint(60 + rem(i, 3) * 5, 100 + div(i, 3) * 5, 58 + rem(i, 2))
+    warm = for i <- 0..7, do: tpoint(200 + rem(i, 3) * 5, 140 + div(i, 3) * 5, 81 + rem(i, 3))
+
+    communities = WeatherPlacement.temp_communities(cool ++ warm, 2)
+    decades = communities |> Enum.map(& &1.decade) |> Enum.sort()
+    assert decades == [50, 80]
+  end
+
+  test "tiny clusters are dropped" do
+    blob = for i <- 0..9, do: tpoint(100 + rem(i, 3) * 4, 100 + div(i, 3) * 4, 72)
+    stray = [tpoint(240, 170, 100)]
+
+    communities = WeatherPlacement.temp_communities(blob ++ stray, 2)
+    assert length(communities) == 1
+    assert hd(communities).decade == 70
+  end
+
+  test "interior community of a repeated decade becomes the adjective" do
+    communities = [
+      %{x: 60.0, y: 100.0, decade: 80, count: 10},
+      %{x: 120.0, y: 100.0, decade: 80, count: 10},
+      %{x: 180.0, y: 100.0, decade: 80, count: 10}
+    ]
+
+    labeled = WeatherPlacement.label_temp_communities(communities)
+    assert Enum.map(labeled, & &1.label) == ["80s", "warm", "80s"]
+    assert Enum.map(labeled, & &1.kind) == [:temp, :word, :temp]
+  end
+
+  test "fewer than 3 same-decade communities keep their numbers" do
+    communities = [
+      %{x: 60.0, y: 100.0, decade: 60, count: 10},
+      %{x: 180.0, y: 100.0, decade: 60, count: 10}
+    ]
+
+    labeled = WeatherPlacement.label_temp_communities(communities)
+    assert Enum.map(labeled, & &1.label) == ["60s", "60s"]
+  end
+
+  test "adjective map matches the plan" do
+    assert WeatherPlacement.adjective(30) == "cold"
+    assert WeatherPlacement.adjective(50) == "cool"
+    assert WeatherPlacement.adjective(60) == "mild"
+    assert WeatherPlacement.adjective(70) == "nice"
+    assert WeatherPlacement.adjective(80) == "warm"
+    assert WeatherPlacement.adjective(90) == "hot"
+  end
 end

@@ -103,6 +103,161 @@ defmodule WeatherPlacement do
     |> Enum.reverse()
   end
 
+  # Communities smaller than this share are noise, not weather (a 650-point
+  # grid gives ~43 points per k=15 cluster if spread evenly).
+  @min_community_points 6
+  # A community whose modal decade covers less than this share of its points
+  # is straddling a temperature boundary and gets split once.
+  @purity_threshold 0.6
+  @purity_split_min_points 8
+
+  @doc """
+  Temperature communities: k-means over the grid points' map coordinates,
+  each cluster labeled with its modal temperature decade.
+
+  `points` is `[%{x, y, temp}]` in GCU px; `k` the community budget (the
+  observed originals carry 12-15 temp callouts).  Clusters whose modal
+  decade covers less than #{trunc(@purity_threshold * 100)}% of their points
+  straddle a real temperature boundary and are split once.  Tiny clusters
+  are dropped.  Deterministic: farthest-point seeding, no randomness.
+
+  Returns `[%{x, y, decade, count}]` (x/y = community centroid).
+  """
+  def temp_communities(points, k) do
+    points
+    |> kmeans(k)
+    |> Enum.flat_map(fn cluster ->
+      if purity(cluster) < @purity_threshold and length(cluster) >= @purity_split_min_points do
+        kmeans(cluster, 2)
+      else
+        [cluster]
+      end
+    end)
+    |> Enum.reject(&(length(&1) < @min_community_points))
+    |> Enum.map(fn cluster ->
+      {cx, cy} = centroid(Enum.map(cluster, &{&1.x, &1.y}))
+      %{x: cx, y: cy, decade: modal_decade(cluster), count: length(cluster)}
+    end)
+  end
+
+  @doc """
+  The original maps sometimes wrote a word where a number would repeat: five
+  "80s" across a region and the interior ones just say "warm".  For each
+  decade with at least 3 communities, the most interior one (smallest mean
+  distance to its same-decade peers) trades its number for the adjective.
+
+  Takes and returns the `temp_communities/2` shape, adding `:label` and
+  `:kind` (`:temp` | `:word`).
+  """
+  def label_temp_communities(communities) do
+    word_positions =
+      communities
+      |> Enum.group_by(& &1.decade)
+      |> Enum.filter(fn {_decade, group} -> length(group) >= 3 end)
+      |> Enum.map(fn {_decade, group} ->
+        group
+        |> Enum.min_by(fn c ->
+          peers = List.delete(group, c)
+          Enum.sum(Enum.map(peers, &distance({c.x, c.y}, {&1.x, &1.y}))) / length(peers)
+        end)
+        |> then(&{&1.x, &1.y})
+      end)
+      |> MapSet.new()
+
+    Enum.map(communities, fn c ->
+      if MapSet.member?(word_positions, {c.x, c.y}) do
+        Map.merge(c, %{kind: :word, label: adjective(c.decade)})
+      else
+        Map.merge(c, %{kind: :temp, label: "#{c.decade}s"})
+      end
+    end)
+  end
+
+  @doc "Decade -> condition word, per the original maps' vocabulary."
+  def adjective(decade) when decade <= 30, do: "cold"
+  def adjective(decade) when decade in [40, 50], do: "cool"
+  def adjective(60), do: "mild"
+  def adjective(70), do: "nice"
+  def adjective(80), do: "warm"
+  def adjective(_), do: "hot"
+
+  @doc """
+  Deterministic k-means (Lloyd's) over maps with `:x`/`:y`.  Seeding is
+  farthest-point (start nearest the global centroid, then repeatedly add the
+  point farthest from every seed) - fully deterministic for a given input
+  order, no RNG.  Returns clusters as lists of the input maps.
+  """
+  def kmeans(points, k) when length(points) <= k, do: Enum.map(points, &[&1])
+
+  def kmeans(points, k) do
+    coords = Enum.map(points, &{&1.x, &1.y})
+    centroids = seed_centroids(coords, k)
+    lloyd(points, coords, centroids, 25)
+  end
+
+  defp seed_centroids(coords, k) do
+    global = centroid(coords)
+    first = Enum.min_by(coords, &distance(&1, global))
+
+    Enum.reduce(2..k, [first], fn _, seeds ->
+      next = Enum.max_by(coords, fn p -> seeds |> Enum.map(&distance(p, &1)) |> Enum.min() end)
+      [next | seeds]
+    end)
+    |> Enum.reverse()
+  end
+
+  defp lloyd(points, coords, centroids, iterations_left) do
+    assignments = Enum.map(coords, &nearest_index(&1, centroids))
+
+    clusters =
+      Enum.zip(assignments, Enum.zip(points, coords))
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+    new_centroids =
+      centroids
+      |> Enum.with_index()
+      |> Enum.map(fn {old, i} ->
+        case clusters[i] do
+          nil -> old
+          members -> members |> Enum.map(&elem(&1, 1)) |> centroid()
+        end
+      end)
+
+    if new_centroids == centroids or iterations_left == 0 do
+      clusters
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map(fn {_i, members} -> Enum.map(members, &elem(&1, 0)) end)
+    else
+      lloyd(points, coords, new_centroids, iterations_left - 1)
+    end
+  end
+
+  defp nearest_index(point, centroids) do
+    centroids
+    |> Enum.with_index()
+    |> Enum.min_by(fn {c, _i} -> distance(point, c) end)
+    |> elem(1)
+  end
+
+  defp decade(temp) when temp < 0, do: -(decade(-temp))
+  defp decade(temp), do: trunc(temp) - rem(trunc(temp), 10)
+
+  defp modal_decade(cluster) do
+    cluster
+    |> Enum.frequencies_by(&decade(&1.temp))
+    |> Enum.max_by(fn {decade, count} -> {count, decade} end)
+    |> elem(0)
+  end
+
+  defp purity(cluster) do
+    {_decade, count} =
+      cluster
+      |> Enum.frequencies_by(&decade(&1.temp))
+      |> Enum.max_by(fn {decade, count} -> {count, decade} end)
+
+    count / length(cluster)
+  end
+
   # -- clustering -----------------------------------------------------
 
   # Single-linkage agglomerative clustering: merge any two groups whose

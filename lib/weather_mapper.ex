@@ -363,8 +363,10 @@ defmodule WeatherMapper do
     end
   end
 
-  # Thinned + collision-resolved pressure callouts (box lower-left, GCU px).
-  def place_pressures(json) do
+  # Thinned pressure callouts as collision boxes (lower-left, GCU px).
+  # Pressures place first (priority 0) - the originals never let a temp
+  # crowd out an H/L.
+  def build_pressure_callouts(json) do
     json
     |> extract_pressure_centers()
     |> WeatherPlacement.thin_pressures()
@@ -372,6 +374,7 @@ defmodule WeatherMapper do
       # Put the x,y as the center of the text, width is 6, height is 10
       %{
         kind: type,
+        label: nil,
         x: cx - @text_width / 2,
         y: cy - @text_height / 2,
         w: @text_width,
@@ -379,7 +382,41 @@ defmodule WeatherMapper do
         priority: 0
       }
     end)
-    |> WeatherPlacement.resolve_collisions()
+  end
+
+  @temp_callout_budget 15
+
+  # Temperature-community callouts from the NDFD forecast grid: uniform
+  # samples -> k-means communities labeled by modal decade -> interior
+  # same-decade communities become words ("warm").  Collision boxes,
+  # priority 1.
+  def build_temp_callouts(cache_dir) do
+    WeatherGrid.fetch_maxt_grid(cache_dir)
+    |> Enum.flat_map(fn %{lat: lat, lon: lon, maxt: maxt} ->
+      xy = geo_to_gcu({lon, lat})
+
+      if within_continental(xy) do
+        {x, y} = xy
+        [%{x: x * 256, y: y * 256, temp: maxt}]
+      else
+        []
+      end
+    end)
+    |> WeatherPlacement.temp_communities(@temp_callout_budget)
+    |> WeatherPlacement.label_temp_communities()
+    |> Enum.map(fn %{x: cx, y: cy, kind: kind, label: label} ->
+      w = @text_width * String.length(label)
+
+      %{
+        kind: kind,
+        label: label,
+        x: cx - w / 2,
+        y: cy - @text_height / 2,
+        w: w,
+        h: @text_height,
+        priority: 1
+      }
+    end)
   end
 
   def draw_pressures(buffer, placed, type, pressure_letter) do
@@ -391,8 +428,8 @@ defmodule WeatherMapper do
   end
 
   # Using a json body of NOAA "feature collections", draw polygons for selected weather features,
-  # then extract and display high and low pressure locations.
-  def make_fc_weather(buffer, fc_json) do
+  # then the already-placed high and low pressure callouts.
+  def make_fc_weather(buffer, fc_json, placed_callouts) do
     has_rain_feature = Enum.any?(@rain_features, fn x -> has_feature(fc_json, x) end)
     has_snow_feature = Enum.any?(@snow_features, fn x -> has_feature(fc_json, x) end)
 
@@ -404,19 +441,15 @@ defmodule WeatherMapper do
         {true, true} -> {54, 81}
       end
 
-    # Thin the 10-15 analyzed centers WPC carries down to the 2-4 marks the
-    # original maps showed, and keep the letters from overlapping.
-    placed_pressures = place_pressures(fc_json)
-
     weather_buffer = gcu_init(buffer)
     |> append_byte(@cmd_shift_in)
     # These two calls could potentionally add weather objects to our Process dictionary
     |> draw_weather_features(fc_json, @rain_features, @color_black)
     |> draw_weather_features(fc_json, @snow_features, @color_white)
     |> select_color(@color_blue)
-    |> draw_pressures(placed_pressures, :high, "H")
+    |> draw_pressures(placed_callouts, :high, "H")
     |> select_color(@color_red)
-    |> draw_pressures(placed_pressures, :low, "L")
+    |> draw_pressures(placed_callouts, :low, "L")
     |> add_rain_legend(rain_y)
     |> add_snow_legend(snow_y)
 
@@ -429,12 +462,18 @@ defmodule WeatherMapper do
     |> Enum.flat_map(&Function.identity/1)
   end
 
-  # Write the text features from the NOAA XML temperatures, plus a headline.
-  def make_text(buffer, temp_urls) do
+  # Write the placed temperature / word callouts, plus a headline.
+  def make_text(buffer, placed_callouts) do
+    temps = Enum.filter(placed_callouts, &(&1.kind in [:temp, :word]))
+
     gcu_init(buffer)
     |> text_attributes({@text_width / 256, @text_height / 256})
     |> select_color(@color_yellow)
-    |> make_weather_temps(temp_urls)
+    |> then(fn buf ->
+      Enum.reduce(temps, buf, fn %{label: label, x: x, y: y}, b ->
+        draw_text_abs(b, label, {x / 256, y / 256})
+      end)
+    end)
     |> select_color(@color_white)
     |> draw_text_abs("Prodigy Reloaded Today's Forecast", {80 / 256, 188 / 256})
     |> draw(@cmd_set_point_rel, [])
@@ -461,10 +500,17 @@ defmodule WeatherMapper do
       end
 
     if weather_json do
+      # Place everything together so temps never sit on an H/L: pressures
+      # first (priority 0), then temperature communities (priority 1).
+      placed_callouts =
+        (build_pressure_callouts(feature_collection_json) ++
+           build_temp_callouts(output_path <> "cache"))
+        |> WeatherPlacement.resolve_collisions()
+
       Logger.debug("Creating NAPLPS buffer")
       pd_buffer =
-        make_fc_weather(<<>>, feature_collection_json)
-        |> make_text(get_temps_from_json(weather_json))
+        make_fc_weather(<<>>, feature_collection_json, placed_callouts)
+        |> make_text(placed_callouts)
 
       Logger.debug("Writing NAPLPS and presentation to output directory.")
       # WO is Weather Overlay
