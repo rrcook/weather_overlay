@@ -662,8 +662,11 @@ defmodule WeatherMapper do
         |> WeatherPlacement.resolve_collisions()
 
       Logger.debug("Creating NAPLPS buffer")
+      # Isobars draw first so every other layer paints over them; gated by
+      # config :weather_overlay, isobars.
       pd_buffer =
-        make_fc_weather(<<>>, feature_collection_json, placed_callouts)
+        WeatherIsobars.append(<<>>, output_path <> "cache")
+        |> make_fc_weather(feature_collection_json, placed_callouts)
         |> make_icons(placed_callouts)
         |> make_text(placed_callouts)
 
