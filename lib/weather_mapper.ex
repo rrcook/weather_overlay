@@ -65,6 +65,10 @@ defmodule WeatherMapper do
   @text_width 6
   @text_height 10
 
+  # Pressure H/L marks read 2x the body text on the original maps.
+  @pressure_text_width 12
+  @pressure_text_height 20
+
   defp meters_to_x(meters), do: (meters - @west_2163) * @x_factor + @min_x
 
   defp meters_to_y(meters), do: (meters - @south_2163) * @y_factor + @min_y
@@ -371,14 +375,14 @@ defmodule WeatherMapper do
     |> extract_pressure_centers()
     |> WeatherPlacement.thin_pressures()
     |> Enum.map(fn {type, {cx, cy}} ->
-      # Put the x,y as the center of the text, width is 6, height is 10
+      # Put the x,y as the center of the (1.5x-sized) letter.
       %{
         kind: type,
         label: nil,
-        x: cx - @text_width / 2,
-        y: cy - @text_height / 2,
-        w: @text_width,
-        h: @text_height,
+        x: cx - @pressure_text_width / 2,
+        y: cy - @pressure_text_height / 2,
+        w: @pressure_text_width,
+        h: @pressure_text_height,
         priority: 0
       }
     end)
@@ -446,10 +450,11 @@ defmodule WeatherMapper do
     # These two calls could potentionally add weather objects to our Process dictionary
     |> draw_weather_features(fc_json, @rain_features, @color_black)
     |> draw_weather_features(fc_json, @snow_features, @color_white)
-    |> select_color(@color_blue)
+    |> text_attributes({@pressure_text_width / 256, @pressure_text_height / 256})
+    |> select_color(@color_white)
     |> draw_pressures(placed_callouts, :high, "H")
-    |> select_color(@color_red)
     |> draw_pressures(placed_callouts, :low, "L")
+    |> text_attributes({@text_width / 256, @text_height / 256})
     |> add_rain_legend(rain_y)
     |> add_snow_legend(snow_y)
 
