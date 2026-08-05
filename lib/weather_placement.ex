@@ -255,6 +255,17 @@ defmodule WeatherPlacement do
     |> Enum.take(count)
   end
 
+  @doc """
+  Wind-word for a point's mean sustained wind and peak gust (mph), per the
+  original maps' vocabulary ("Windy" appears on the 1988 demo map).  Strongest
+  applicable word wins; calm air gets none.
+  """
+  def wind_word(wind, gust)
+  def wind_word(_wind, gust) when is_number(gust) and gust >= 30, do: "gusty"
+  def wind_word(wind, _gust) when is_number(wind) and wind >= 25, do: "windy"
+  def wind_word(wind, _gust) when is_number(wind) and wind >= 15, do: "breezy"
+  def wind_word(_wind, _gust), do: nil
+
   @doc "NDFD mean cloud-cover percent -> sky icon category."
   def sky_category(sky) when sky <= 30, do: :sunny
   def sky_category(sky) when sky < 70, do: :partly

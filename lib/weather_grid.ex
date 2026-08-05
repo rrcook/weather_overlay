@@ -24,9 +24,10 @@ defmodule WeatherGrid do
   batch it through NDFDgenLatLonList, and cache the parsed result per day so
   development re-runs do not hammer NOAA.
 
-  Returns points as `%{lat, lon, maxt, sky}` - today's forecast daily-maximum
-  temperature and mean cloud-cover percent (first 12 forecast hours),
-  matching the map's "Today's Forecast" framing.
+  Returns points as `%{lat, lon, maxt, sky, wind, gust}` - today's forecast
+  daily-maximum temperature, mean cloud-cover percent, and mean sustained
+  wind / peak gust in mph (all over the first 12 forecast hours), matching
+  the map's "Today's Forecast" framing.
   """
   require Logger
 
@@ -63,12 +64,24 @@ defmodule WeatherGrid do
   def fetch_grid(cache_dir, date \\ Date.utc_today()) do
     File.mkdir_p(cache_dir)
     prune_stale(cache_dir, date)
-    cache_file = Path.join(cache_dir, "ndfd-grid-#{Date.to_iso8601(date)}.json")
+    # "v2": the record format gained wind fields; the new name keeps a stale
+    # same-day cache from an older build from being read back with nil winds.
+    cache_file = Path.join(cache_dir, "ndfd-grid-v2-#{Date.to_iso8601(date)}.json")
 
     with {:ok, cached} <- File.read(cache_file),
          {:ok, points} <- Jason.decode(cached) do
       Logger.debug("NDFD grid: #{length(points)} cached points (#{cache_file})")
-      Enum.map(points, &%{lat: &1["lat"], lon: &1["lon"], maxt: &1["maxt"], sky: &1["sky"]})
+      Enum.map(
+        points,
+        &%{
+          lat: &1["lat"],
+          lon: &1["lon"],
+          maxt: &1["maxt"],
+          sky: &1["sky"],
+          wind: &1["wind"],
+          gust: &1["gust"]
+        }
+      )
     else
       _ ->
         {points, failed_batches} = fetch_all_batches()
@@ -109,7 +122,9 @@ defmodule WeatherGrid do
         "product" => "time-series",
         "Unit" => "e",
         "maxt" => "maxt",
-        "sky" => "sky"
+        "sky" => "sky",
+        "wspd" => "wspd",
+        "wgust" => "wgust"
       })
 
     with {:ok, response} <- get_with_retry(@endpoint <> "?" <> query, 3),
@@ -150,7 +165,14 @@ defmodule WeatherGrid do
           {lat, lon} <- [coords[key]],
           maxt <- [first_temp(params)],
           is_number(maxt) and is_number(lat) and is_number(lon) do
-        %{lat: lat, lon: lon, maxt: maxt, sky: mean_sky(params)}
+        %{
+          lat: lat,
+          lon: lon,
+          maxt: maxt,
+          sky: mean_sky(params),
+          wind: mean_wind(params, "sustained"),
+          gust: peak_wind(params, "gust")
+        }
       end
     else
       _ ->
@@ -209,6 +231,38 @@ defmodule WeatherGrid do
     case values do
       [] -> nil
       vs -> Enum.sum(vs) / length(vs)
+    end
+  end
+
+  @knots_to_mph 1.15078
+
+  # The wind elements arrive as sibling <wind-speed> nodes distinguished by
+  # their type attribute, in KNOTS regardless of Unit=e; convert to mph.
+  defp wind_values(params, type) do
+    params
+    |> get_in(["#content", "wind-speed"])
+    |> List.wrap()
+    |> Enum.find(&(is_map(&1) and &1["-type"] == type))
+    |> case do
+      nil -> []
+      node -> node |> get_in(["#content", "value"]) |> List.wrap()
+    end
+    |> Enum.map(&parse_int/1)
+    |> Enum.filter(&is_number/1)
+    |> Enum.take(12)
+  end
+
+  defp mean_wind(params, type) do
+    case wind_values(params, type) do
+      [] -> nil
+      vs -> Enum.sum(vs) / length(vs) * @knots_to_mph
+    end
+  end
+
+  defp peak_wind(params, type) do
+    case wind_values(params, type) do
+      [] -> nil
+      vs -> Enum.max(vs) * @knots_to_mph
     end
   end
 

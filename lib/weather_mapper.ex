@@ -419,6 +419,35 @@ defmodule WeatherMapper do
     end)
   end
 
+  @wind_word_budget 2
+
+  # Wind-word callouts ("breezy" / "windy" / "gusty"): quantize each grid
+  # point's wind into a word (or none), find up to 2 communities per word,
+  # and place the word at each centroid.  Priority 3 - wind words are the
+  # most occasional mark on the originals and yield to everything else.
+  def build_wind_callouts(gcu_points) do
+    gcu_points
+    |> Enum.group_by(&WeatherPlacement.wind_word(&1.wind, &1.gust))
+    |> Enum.reject(fn {word, _} -> is_nil(word) end)
+    |> Enum.flat_map(fn {word, points} ->
+      points
+      |> WeatherPlacement.spatial_communities(@wind_word_budget)
+      |> Enum.map(fn %{x: cx, y: cy} ->
+        w = @text_width * String.length(word)
+
+        %{
+          kind: :wind,
+          label: word,
+          x: cx - w / 2,
+          y: cy - @text_height / 2,
+          w: w,
+          h: @text_height,
+          priority: 3
+        }
+      end)
+    end)
+  end
+
   @tstorm_feature_names ["Rain/Thunderstorms", "Severe Thunderstorms Possible"]
 
   # T-storm icon callouts: one candidate per thunderstorm polygon in the WPC
@@ -491,7 +520,16 @@ defmodule WeatherMapper do
 
       if within_continental(xy) do
         {x, y} = xy
-        [%{x: x * 256, y: y * 256, temp: point.maxt, sky: point[:sky]}]
+        [
+          %{
+            x: x * 256,
+            y: y * 256,
+            temp: point.maxt,
+            sky: point[:sky],
+            wind: point[:wind],
+            gust: point[:gust]
+          }
+        ]
       else
         []
       end
@@ -564,7 +602,8 @@ defmodule WeatherMapper do
     |> Enum.flat_map(&Function.identity/1)
   end
 
-  # Write the placed temperature / word callouts, plus a headline.
+  # Write the placed temperature / word callouts (yellow), wind words
+  # (white, per the 1988 map's "Windy"), plus a headline.
   def make_text(buffer, placed_callouts) do
     temps = Enum.filter(placed_callouts, &(&1.kind in [:temp, :word]))
 
@@ -577,6 +616,13 @@ defmodule WeatherMapper do
       end)
     end)
     |> select_color(@color_white)
+    |> then(fn buf ->
+      placed_callouts
+      |> Enum.filter(&(&1.kind == :wind))
+      |> Enum.reduce(buf, fn %{label: label, x: x, y: y}, b ->
+        draw_text_abs(b, label, {x / 256, y / 256})
+      end)
+    end)
     |> draw_text_abs("Prodigy Reloaded Today's Forecast", {80 / 256, 188 / 256})
     |> draw(@cmd_set_point_rel, [])
   end
@@ -611,7 +657,8 @@ defmodule WeatherMapper do
         (build_pressure_callouts(feature_collection_json) ++
            build_temp_callouts(gcu_grid) ++
            build_icon_callouts(gcu_grid) ++
-           build_tstorm_callouts(feature_collection_json))
+           build_tstorm_callouts(feature_collection_json) ++
+           build_wind_callouts(gcu_grid))
         |> WeatherPlacement.resolve_collisions()
 
       Logger.debug("Creating NAPLPS buffer")

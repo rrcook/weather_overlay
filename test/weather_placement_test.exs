@@ -273,4 +273,11 @@ defmodule WeatherPlacementTest do
     assert length(communities) == 2
     assert Enum.all?(communities, &(&1.count == 8 or &1.count == 9))
   end
+  test "wind words map thresholds, strongest first" do
+    assert WeatherPlacement.wind_word(10, nil) == nil
+    assert WeatherPlacement.wind_word(16, nil) == "breezy"
+    assert WeatherPlacement.wind_word(26, nil) == "windy"
+    assert WeatherPlacement.wind_word(16, 35) == "gusty"
+    assert WeatherPlacement.wind_word(nil, nil) == nil
+  end
 end
