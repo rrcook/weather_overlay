@@ -24,7 +24,8 @@ defmodule WeatherOverlay.MixProject do
       {:jason, "~> 1.4"},
       {:httpoison, "~> 1.8.2"},
       {:elixir_xml_to_map, "~> 3.1"},
-      {:proj, "~> 0.2.3"},
+      # local integration: rrcook fork fixes the macOS NIF linking; hex 0.2.3 is abandoned
+      {:proj, git: "https://github.com/rrcook/proj.git"},
       {:prodigy_objects, git: "https://github.com/rrcook/prodigy_objects.git"},
       {:naplps_writer, git: "https://github.com/rrcook/naplps_writer.git"}
       # {:dep_from_hexpm, "~> 0.3.0"},
