@@ -349,29 +349,45 @@ defmodule WeatherMapper do
     buffer <> IO.iodata_to_binary(temp_buffer_list)
   end
 
-  # Read through the feature collection json and extract the high or low
-  # pressures. Convert the latitude & longitude to GCU x & y,
-  # filter to make sure it's within the continental US rectangle, and
-  # put it on the map.
-  def make_pressures(buffer, json, pressure_text, pressure_letter) do
-    width_center = @text_width / 2 / 256
-    height_center = @text_height / 2 / 256
+  # Read through the feature collection json and extract every high and low
+  # pressure center inside the continental US rectangle, as
+  # {:high | :low, {x, y}} in GCU px - the input WeatherPlacement thins to
+  # the sparse 2-4 mark look of the original maps.
+  def extract_pressure_centers(json) do
+    for {name, type} <- [{"high", :high}, {"low", :low}],
+        feature <- Enum.filter(json["features"], &(&1["name"] == name)),
+        xy = feature["geometry"]["coordinates"] |> List.to_tuple() |> geo_to_gcu(),
+        within_continental(xy) do
+      {x, y} = xy
+      {type, {x * 256, y * 256}}
+    end
+  end
 
-    pressures = Enum.filter(json["features"], &(&1["name"] == pressure_text))
-
-    pressure_coords =
-      Enum.map(pressures, fn pressure -> pressure["geometry"]["coordinates"] end)
-      |> Enum.map(&List.to_tuple/1)
-      |> Enum.map(&WeatherMapper.geo_to_gcu/1)
+  # Thinned + collision-resolved pressure callouts (box lower-left, GCU px).
+  def place_pressures(json) do
+    json
+    |> extract_pressure_centers()
+    |> WeatherPlacement.thin_pressures()
+    |> Enum.map(fn {type, {cx, cy}} ->
       # Put the x,y as the center of the text, width is 6, height is 10
-      |> Enum.map(fn {x, y} -> {x - width_center, y - height_center} end)
-      |> Enum.filter(&WeatherMapper.within_continental/1)
+      %{
+        kind: type,
+        x: cx - @text_width / 2,
+        y: cy - @text_height / 2,
+        w: @text_width,
+        h: @text_height,
+        priority: 0
+      }
+    end)
+    |> WeatherPlacement.resolve_collisions()
+  end
 
-    pressure_buffer =
-      Enum.map(pressure_coords, fn xy -> draw_text_abs(<<>>, pressure_letter, xy) end)
-      |> IO.iodata_to_binary()
-
-    buffer <> pressure_buffer
+  def draw_pressures(buffer, placed, type, pressure_letter) do
+    placed
+    |> Enum.filter(&(&1.kind == type))
+    |> Enum.reduce(buffer, fn %{x: x, y: y}, buf ->
+      draw_text_abs(buf, pressure_letter, {x / 256, y / 256})
+    end)
   end
 
   # Using a json body of NOAA "feature collections", draw polygons for selected weather features,
@@ -388,15 +404,19 @@ defmodule WeatherMapper do
         {true, true} -> {54, 81}
       end
 
+    # Thin the 10-15 analyzed centers WPC carries down to the 2-4 marks the
+    # original maps showed, and keep the letters from overlapping.
+    placed_pressures = place_pressures(fc_json)
+
     weather_buffer = gcu_init(buffer)
     |> append_byte(@cmd_shift_in)
     # These two calls could potentionally add weather objects to our Process dictionary
     |> draw_weather_features(fc_json, @rain_features, @color_black)
     |> draw_weather_features(fc_json, @snow_features, @color_white)
     |> select_color(@color_blue)
-    |> make_pressures(fc_json, "high", "H")
+    |> draw_pressures(placed_pressures, :high, "H")
     |> select_color(@color_red)
-    |> make_pressures(fc_json, "low", "L")
+    |> draw_pressures(placed_pressures, :low, "L")
     |> add_rain_legend(rain_y)
     |> add_snow_legend(snow_y)
 
