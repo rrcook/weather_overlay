@@ -205,4 +205,63 @@ defmodule WeatherPlacementTest do
     assert WeatherPlacement.adjective(80) == "warm"
     assert WeatherPlacement.adjective(90) == "hot"
   end
+  test "a clump of 6 same-decade communities collapses to 2 numbers + 1 word" do
+    # Adjacent communities ~50 px apart (chained by single linkage).
+    communities =
+      for i <- 0..5 do
+        %{x: 40.0 + i * 40.0, y: 100.0, decade: 80, count: 10}
+      end
+
+    labeled = WeatherPlacement.label_temp_communities(communities)
+    assert length(labeled) == 3
+    assert Enum.count(labeled, &(&1.kind == :temp)) == 2
+    assert Enum.count(labeled, &(&1.kind == :word)) == 1
+
+    # The numbers anchor the extremes; the word sits interior.
+    xs = labeled |> Enum.filter(&(&1.kind == :temp)) |> Enum.map(& &1.x) |> Enum.sort()
+    assert xs == [40.0, 240.0]
+
+    # The word sits mid-gap between the kept numbers, not at the clump edge.
+    word = hd(Enum.filter(labeled, &(&1.kind == :word)))
+    assert word.label == "warm"
+    assert word.x > 80.0 and word.x < 200.0
+  end
+
+  test "far-apart same-decade groups do not chain into one clump" do
+    # Two tight pairs far apart: each pair is one region -> one number each.
+    communities = [
+      %{x: 40.0, y: 70.0, decade: 60, count: 12},
+      %{x: 80.0, y: 70.0, decade: 60, count: 8},
+      %{x: 200.0, y: 160.0, decade: 60, count: 7},
+      %{x: 240.0, y: 160.0, decade: 60, count: 9}
+    ]
+
+    labeled = WeatherPlacement.label_temp_communities(communities)
+    assert length(labeled) == 2
+    assert Enum.all?(labeled, &(&1.kind == :temp))
+    # Each survivor is its pair's larger community.
+    assert Enum.map(labeled, & &1.x) |> Enum.sort() == [40.0, 240.0]
+  end
+
+  test "a chained pair collapses to the larger community's number" do
+    pair = [
+      %{x: 100.0, y: 100.0, decade: 90, count: 6},
+      %{x: 100.0, y: 130.0, decade: 90, count: 14}
+    ]
+
+    assert [%{x: 100.0, y: 130.0, kind: :temp, label: "90s"}] =
+             WeatherPlacement.label_temp_communities(pair)
+  end
+
+  test "a long chain of 9 keeps 3 spread numbers and gets 2 words" do
+    communities =
+      for i <- 0..8 do
+        %{x: 30.0 + i * 25.0, y: 120.0, decade: 90, count: 10}
+      end
+
+    labeled = WeatherPlacement.label_temp_communities(communities)
+    assert Enum.count(labeled, &(&1.kind == :temp)) == 3
+    assert Enum.count(labeled, &(&1.kind == :word)) == 2
+    assert Enum.all?(Enum.filter(labeled, &(&1.kind == :word)), &(&1.label == "hot"))
+  end
 end

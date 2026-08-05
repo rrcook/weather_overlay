@@ -106,6 +106,11 @@ defmodule WeatherPlacement do
   # Communities smaller than this share are noise, not weather (a 650-point
   # grid gives ~43 points per k=15 cluster if spread evenly).
   @min_community_points 6
+  # Same-decade communities closer than this chain into one "clump" that
+  # collapses to outer numbers + an interior word.  Community spacing on the
+  # 1.5-degree grid runs ~35-60 px, so 60 links adjacent neighbors without
+  # jumping across a region boundary.
+  @clump_threshold 60
   # A community whose modal decade covers less than this share of its points
   # is straddling a temperature boundary and gets split once.
   @purity_threshold 0.6
@@ -141,36 +146,98 @@ defmodule WeatherPlacement do
   end
 
   @doc """
-  The original maps sometimes wrote a word where a number would repeat: five
-  "80s" across a region and the interior ones just say "warm".  For each
-  decade with at least 3 communities, the most interior one (smallest mean
-  distance to its same-decade peers) trades its number for the adjective.
+  The original maps wrote a word where numbers would repeat: a run of "80s"
+  across a region keeps its outer numbers and the middle just says "warm".
 
-  Takes and returns the `temp_communities/2` shape, adding `:label` and
-  `:kind` (`:temp` | `:word`).
+  General rule, applied per decade: chain same-decade communities within
+  #{@clump_threshold} px into clumps (single-linkage - no fixed geography,
+  works for any day's pattern).  A clump of n >= 3 keeps max(2, ceil(n/3))
+  members as numbers (farthest-point spread, so the extremes anchor the
+  region), puts the adjective on the most interior remaining member (a 2nd
+  word, well away from the 1st, when n >= 8), and DROPS the rest - collapsing
+  repetition instead of printing it.  A chained pair is one region and keeps
+  a single number (at the larger community's center); singles keep theirs.
+
+  Takes the `temp_communities/2` shape; returns surviving callouts with
+  `:label` and `:kind` (`:temp` | `:word`).
   """
   def label_temp_communities(communities) do
-    word_positions =
+    by_pos = Map.new(communities, &{{&1.x, &1.y}, &1})
+
+    keep =
       communities
       |> Enum.group_by(& &1.decade)
-      |> Enum.filter(fn {_decade, group} -> length(group) >= 3 end)
-      |> Enum.map(fn {_decade, group} ->
+      |> Enum.flat_map(fn {_decade, group} ->
         group
-        |> Enum.min_by(fn c ->
-          peers = List.delete(group, c)
-          Enum.sum(Enum.map(peers, &distance({c.x, c.y}, {&1.x, &1.y}))) / length(peers)
-        end)
-        |> then(&{&1.x, &1.y})
+        |> Enum.map(&{&1.x, &1.y})
+        |> cluster(@clump_threshold)
+        |> Enum.flat_map(fn clump -> collapse_clump(clump, by_pos) end)
       end)
-      |> MapSet.new()
+      |> Map.new()
 
-    Enum.map(communities, fn c ->
-      if MapSet.member?(word_positions, {c.x, c.y}) do
-        Map.merge(c, %{kind: :word, label: adjective(c.decade)})
-      else
-        Map.merge(c, %{kind: :temp, label: "#{c.decade}s"})
+    communities
+    |> Enum.flat_map(fn c ->
+      case keep[{c.x, c.y}] do
+        nil -> []
+        :temp -> [Map.merge(c, %{kind: :temp, label: "#{c.decade}s"})]
+        :word -> [Map.merge(c, %{kind: :word, label: adjective(c.decade)})]
       end
     end)
+  end
+
+  # Collapse one spatial clump of same-decade communities: a single stays a
+  # number; a chained PAIR is one region, so it keeps one number - at the
+  # larger community's center (it speaks for more grid points); bigger clumps
+  # keep their outer members as numbers, put a word on an interior member,
+  # and DROP the rest.  Six adjacent "80s" become "80s ... warm ... 80s".
+  defp collapse_clump([only], _by_pos), do: [{only, :temp}]
+
+  defp collapse_clump([_, _] = pair, by_pos) do
+    survivor = Enum.max_by(pair, fn pos -> by_pos[pos].count end)
+    [{survivor, :temp}]
+  end
+
+  defp collapse_clump(clump, _by_pos) do
+    n = length(clump)
+    number_count = max(2, ceil(n / 3))
+    numbers = spread_select(clump, number_count)
+
+    # Words go where the numbers are not: the interior member farthest from
+    # every kept number (then from the earlier word too) sits in the middle
+    # of the collapsed run - NOT at the clump centroid, which for a long or
+    # bent chain lands wherever the mass balances rather than mid-gap.
+    words = pick_words(clump -- numbers, numbers, if(n >= 8, do: 2, else: 1))
+
+    Enum.map(numbers, &{&1, :temp}) ++ Enum.map(words, &{&1, :word})
+  end
+
+  defp pick_words(interior, anchors, count) do
+    Enum.reduce(1..count//1, [], fn _, words ->
+      candidates = interior -- words
+
+      next =
+        Enum.max_by(candidates, fn p ->
+          (anchors ++ words) |> Enum.map(&distance(p, &1)) |> Enum.min()
+        end)
+
+      words ++ [next]
+    end)
+  end
+
+  # Deterministic farthest-point subset selection: the two most distant
+  # members, then repeatedly the member farthest from everything chosen.
+  defp spread_select(points, count) do
+    pairs = for a <- points, b <- points, a < b, do: {distance(a, b), {a, b}}
+    {_d, {a, b}} = Enum.max_by(pairs, &elem(&1, 0))
+
+    Enum.reduce(3..count//1, [a, b], fn _, chosen ->
+      next =
+        (points -- chosen)
+        |> Enum.max_by(fn p -> chosen |> Enum.map(&distance(p, &1)) |> Enum.min() end)
+
+      [next | chosen]
+    end)
+    |> Enum.take(count)
   end
 
   @doc "Decade -> condition word, per the original maps' vocabulary."
