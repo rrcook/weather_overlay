@@ -39,4 +39,18 @@ defmodule WeatherGridTest do
     assert WeatherGrid.parse_dwml("not xml at all") == []
     assert WeatherGrid.parse_dwml("<data></data>") == []
   end
+  test "parse_dwml averages the first hours of cloud cover when present" do
+    xml = File.read!("test/fixtures/ndfd_two_points_sky.xml")
+    points = WeatherGrid.parse_dwml(xml)
+
+    assert length(points) == 2
+    assert Enum.all?(points, &is_number(&1.sky))
+    assert Enum.all?(points, &(&1.sky >= 0 and &1.sky <= 100))
+  end
+
+  test "parse_dwml yields sky: nil when the response has no cloud cover" do
+    xml = File.read!("test/fixtures/ndfd_two_points.xml")
+    points = WeatherGrid.parse_dwml(xml)
+    assert Enum.all?(points, &is_nil(&1.sky))
+  end
 end

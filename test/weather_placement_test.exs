@@ -264,4 +264,13 @@ defmodule WeatherPlacementTest do
     assert Enum.count(labeled, &(&1.kind == :word)) == 2
     assert Enum.all?(Enum.filter(labeled, &(&1.kind == :word)), &(&1.label == "hot"))
   end
+  test "spatial_communities finds blob centroids and drops strays" do
+    blob_a = for i <- 0..7, do: %{x: 60 + rem(i, 3) * 5, y: 100 + div(i, 3) * 5}
+    blob_b = for i <- 0..7, do: %{x: 200 + rem(i, 3) * 5, y: 150 + div(i, 3) * 5}
+    stray = [%{x: 130, y: 60}]
+
+    communities = WeatherPlacement.spatial_communities(blob_a ++ blob_b ++ stray, 3)
+    assert length(communities) == 2
+    assert Enum.all?(communities, &(&1.count == 8 or &1.count == 9))
+  end
 end

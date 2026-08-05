@@ -24,8 +24,9 @@ defmodule WeatherGrid do
   batch it through NDFDgenLatLonList, and cache the parsed result per day so
   development re-runs do not hammer NOAA.
 
-  Returns points as `%{lat, lon, maxt}` - today's forecast daily-maximum
-  temperature, matching the map's "Today's Forecast" framing.
+  Returns points as `%{lat, lon, maxt, sky}` - today's forecast daily-maximum
+  temperature and mean cloud-cover percent (first 12 forecast hours),
+  matching the map's "Today's Forecast" framing.
   """
   require Logger
 
@@ -55,19 +56,19 @@ defmodule WeatherGrid do
   end
 
   @doc """
-  Today's max-temperature grid, cached under `cache_dir` (one JSON file per
-  date).  On fetch failure returns whatever points were retrieved (possibly
-  `[]`) - a degraded map beats no map.
+  Today's forecast grid (max temperature + mean sky cover), cached under
+  `cache_dir` (one JSON file per date).  On fetch failure returns whatever
+  points were retrieved (possibly `[]`) - a degraded map beats no map.
   """
-  def fetch_maxt_grid(cache_dir, date \\ Date.utc_today()) do
+  def fetch_grid(cache_dir, date \\ Date.utc_today()) do
     File.mkdir_p(cache_dir)
     prune_stale(cache_dir, date)
-    cache_file = Path.join(cache_dir, "ndfd-maxt-#{Date.to_iso8601(date)}.json")
+    cache_file = Path.join(cache_dir, "ndfd-grid-#{Date.to_iso8601(date)}.json")
 
     with {:ok, cached} <- File.read(cache_file),
          {:ok, points} <- Jason.decode(cached) do
       Logger.debug("NDFD grid: #{length(points)} cached points (#{cache_file})")
-      Enum.map(points, &%{lat: &1["lat"], lon: &1["lon"], maxt: &1["maxt"]})
+      Enum.map(points, &%{lat: &1["lat"], lon: &1["lon"], maxt: &1["maxt"], sky: &1["sky"]})
     else
       _ ->
         {points, failed_batches} = fetch_all_batches()
@@ -107,7 +108,8 @@ defmodule WeatherGrid do
         "listLatLon" => list,
         "product" => "time-series",
         "Unit" => "e",
-        "maxt" => "maxt"
+        "maxt" => "maxt",
+        "sky" => "sky"
       })
 
     with {:ok, response} <- get_with_retry(@endpoint <> "?" <> query, 3),
@@ -119,11 +121,12 @@ defmodule WeatherGrid do
   end
 
   @doc """
-  Parse a DWML time-series response into `[%{lat, lon, maxt}]`, taking the
-  first (today's) maximum-temperature value per point.  Points the NDFD grid
-  does not cover (ocean, off-CONUS) come back without usable values and are
-  dropped.  Only the `<data>` section is parsed - the `<head>` contains mixed
-  content that XmlToMap cannot represent.
+  Parse a DWML time-series response into `[%{lat, lon, maxt, sky}]`: the
+  first (today's) maximum-temperature value per point, plus the mean of the
+  first 12 hourly cloud-cover values (nil when the point has none).  Points
+  the NDFD grid does not cover (ocean, off-CONUS) come back without usable
+  temperatures and are dropped.  Only the `<data>` section is parsed - the
+  `<head>` contains mixed content that XmlToMap cannot represent.
   """
   def parse_dwml(xml) do
     with [_, rest] <- String.split(xml, "<data>", parts: 2),
@@ -147,7 +150,7 @@ defmodule WeatherGrid do
           {lat, lon} <- [coords[key]],
           maxt <- [first_temp(params)],
           is_number(maxt) and is_number(lat) and is_number(lon) do
-        %{lat: lat, lon: lon, maxt: maxt}
+        %{lat: lat, lon: lon, maxt: maxt, sky: mean_sky(params)}
       end
     else
       _ ->
@@ -190,6 +193,22 @@ defmodule WeatherGrid do
       {:ok, XmlToMap.naive_map(xml)}
     catch
       _, _ -> {:error, :xml_parse_error}
+    end
+  end
+
+  # Mean of the first 12 hourly cloud-cover percentages (the forecast day).
+  defp mean_sky(params) do
+    values =
+      params
+      |> get_in(["#content", "cloud-amount", "#content", "value"])
+      |> List.wrap()
+      |> Enum.map(&parse_int/1)
+      |> Enum.filter(&is_number/1)
+      |> Enum.take(12)
+
+    case values do
+      [] -> nil
+      vs -> Enum.sum(vs) / length(vs)
     end
   end
 

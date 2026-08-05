@@ -146,6 +146,21 @@ defmodule WeatherPlacement do
   end
 
   @doc """
+  Generic spatial communities: k-means over `:x`/`:y` maps with tiny clusters
+  dropped.  Returns `[%{x, y, count}]` centroids.  Used for the icon layers
+  (sky-cover categories), where there is no decade labeling to do.
+  """
+  def spatial_communities(points, k) do
+    points
+    |> kmeans(k)
+    |> Enum.reject(&(length(&1) < @min_community_points))
+    |> Enum.map(fn cluster ->
+      {cx, cy} = centroid(Enum.map(cluster, &{&1.x, &1.y}))
+      %{x: cx, y: cy, count: length(cluster)}
+    end)
+  end
+
+  @doc """
   The original maps wrote a word where numbers would repeat: a run of "80s"
   across a region keeps its outer numbers and the middle just says "warm".
 
@@ -239,6 +254,11 @@ defmodule WeatherPlacement do
     end)
     |> Enum.take(count)
   end
+
+  @doc "NDFD mean cloud-cover percent -> sky icon category."
+  def sky_category(sky) when sky <= 30, do: :sunny
+  def sky_category(sky) when sky < 70, do: :partly
+  def sky_category(_), do: :cloudy
 
   @doc "Decade -> condition word, per the original maps' vocabulary."
   def adjective(decade) when decade <= 30, do: "cold"
