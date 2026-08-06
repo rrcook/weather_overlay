@@ -54,9 +54,10 @@ defmodule WeatherMapper do
   @y_factor (@max_y - @min_y) / (@north_2163 - @south_2163)
 
   @rain_features ["Rain", "Rain/Thunderstorms", "Heavy Rain/Flash Flooding Possible", "Severe Thunderstorms Possible"]
-  @wo_fn_map %{
-    "Severe Thunderstorms Possible" => &WeatherObjects.draw_lightning/2
-  }
+  # T-storm icons are now placed through the callout pipeline
+  # (build_tstorm_callouts) so they participate in collision resolution;
+  # the per-feature draw hook is retired but the mechanism kept.
+  @wo_fn_map %{}
 
   # Cloud features may be used later.
   # @cloud_features ["Cloudy", "Partly Cloudy", "Mostly Cloudy"]
@@ -64,6 +65,10 @@ defmodule WeatherMapper do
 
   @text_width 6
   @text_height 10
+
+  # Pressure H/L marks read 2x the body text on the original maps.
+  @pressure_text_width 12
+  @pressure_text_height 20
 
   defp meters_to_x(meters), do: (meters - @west_2163) * @x_factor + @min_x
 
@@ -349,34 +354,221 @@ defmodule WeatherMapper do
     buffer <> IO.iodata_to_binary(temp_buffer_list)
   end
 
-  # Read through the feature collection json and extract the high or low
-  # pressures. Convert the latitude & longitude to GCU x & y,
-  # filter to make sure it's within the continental US rectangle, and
-  # put it on the map.
-  def make_pressures(buffer, json, pressure_text, pressure_letter) do
-    width_center = @text_width / 2 / 256
-    height_center = @text_height / 2 / 256
+  # Read through the feature collection json and extract every high and low
+  # pressure center inside the continental US rectangle, as
+  # {:high | :low, {x, y}} in GCU px - the input WeatherPlacement thins to
+  # the sparse 2-4 mark look of the original maps.
+  def extract_pressure_centers(json) do
+    for {name, type} <- [{"high", :high}, {"low", :low}],
+        feature <- Enum.filter(json["features"], &(&1["name"] == name)),
+        xy = feature["geometry"]["coordinates"] |> List.to_tuple() |> geo_to_gcu(),
+        within_continental(xy) do
+      {x, y} = xy
+      {type, {x * 256, y * 256}}
+    end
+  end
 
-    pressures = Enum.filter(json["features"], &(&1["name"] == pressure_text))
+  @icon_budget_per_category 3
+  @icon_w 24
+  @icon_h 16
 
-    pressure_coords =
-      Enum.map(pressures, fn pressure -> pressure["geometry"]["coordinates"] end)
+  # Sky-cover icon callouts: quantize each grid point's mean cloud cover into
+  # sunny / partly / cloudy, find up to #{3} communities per category, and
+  # place an icon at each centroid.  The icons themselves are the 1988 demo
+  # disk cloud family (WeatherObjects draw_partly / draw_cloudy) with the
+  # newer star-style sun (draw_sun).  Collision boxes, priority 2 - icons
+  # yield to pressures and temperatures, like the originals.
+  def build_icon_callouts(gcu_points) do
+    gcu_points
+    |> Enum.reject(&is_nil(&1.sky))
+    |> Enum.group_by(&WeatherPlacement.sky_category(&1.sky))
+    |> Enum.flat_map(fn {category, points} ->
+      points
+      |> WeatherPlacement.spatial_communities(@icon_budget_per_category)
+      |> Enum.map(fn %{x: cx, y: cy} ->
+        %{
+          kind: {:icon, category},
+          label: nil,
+          x: cx - @icon_w / 2,
+          y: cy - @icon_h / 2,
+          w: @icon_w,
+          h: @icon_h,
+          priority: 2
+        }
+      end)
+    end)
+  end
+
+  # Draw the placed icons (anchor = box center, in GCU fractions).  Each icon
+  # starts from solid texture: the WeatherObjects draw functions do not all
+  # set one, so without the reset an icon inherits ambient state - e.g. the
+  # legends' vertical hatching bleeding into the first sun's disk.
+  def make_icons(buffer, placed_callouts) do
+    placed_callouts
+    |> Enum.filter(&match?({:icon, _}, &1.kind))
+    |> Enum.reduce(buffer, fn %{kind: {:icon, category}, x: x, y: y, w: w, h: h}, buf ->
+      anchor = {(x + w / 2) / 256, (y + h / 2) / 256}
+      buf = append_bytes(buf, [@cmd_texture_attr, @hatching_solid])
+
+      case category do
+        :sunny -> WeatherObjects.draw_sun(buf, anchor)
+        :partly -> WeatherObjects.draw_partly(buf, anchor)
+        :cloudy -> WeatherObjects.draw_cloudy(buf, anchor)
+        :tstorm -> WeatherObjects.draw_lightning(buf, anchor)
+      end
+    end)
+  end
+
+  @wind_word_budget 2
+
+  # Wind-word callouts ("breezy" / "windy" / "gusty"): quantize each grid
+  # point's wind into a word (or none), find up to 2 communities per word,
+  # and place the word at each centroid.  Priority 3 - wind words are the
+  # most occasional mark on the originals and yield to everything else.
+  def build_wind_callouts(gcu_points) do
+    gcu_points
+    |> Enum.group_by(&WeatherPlacement.wind_word(&1.wind, &1.gust))
+    |> Enum.reject(fn {word, _} -> is_nil(word) end)
+    |> Enum.flat_map(fn {word, points} ->
+      points
+      |> WeatherPlacement.spatial_communities(@wind_word_budget)
+      |> Enum.map(fn %{x: cx, y: cy} ->
+        w = @text_width * String.length(word)
+
+        %{
+          kind: :wind,
+          label: word,
+          x: cx - w / 2,
+          y: cy - @text_height / 2,
+          w: w,
+          h: @text_height,
+          priority: 3
+        }
+      end)
+    end)
+  end
+
+  @tstorm_feature_names ["Rain/Thunderstorms", "Severe Thunderstorms Possible"]
+
+  # T-storm icon callouts: one candidate per thunderstorm polygon in the WPC
+  # feature collection, placed at the polygon's centroid (capped like the
+  # other icon categories).  Supersedes the old Process-dictionary lightning
+  # hook, which drew outside collision resolution.
+  def build_tstorm_callouts(fc_json) do
+    @tstorm_feature_names
+    |> Enum.flat_map(fn name -> Enum.filter(fc_json["features"], &(&1["name"] == name)) end)
+    |> Enum.flat_map(fn feature ->
+      case feature["geometry"] do
+        %{"coordinates" => [polys | _]} when is_list(polys) -> polys
+        _ -> []
+      end
+    end)
+    |> Enum.map(fn poly ->
+      poly
       |> Enum.map(&List.to_tuple/1)
-      |> Enum.map(&WeatherMapper.geo_to_gcu/1)
-      # Put the x,y as the center of the text, width is 6, height is 10
-      |> Enum.map(fn {x, y} -> {x - width_center, y - height_center} end)
-      |> Enum.filter(&WeatherMapper.within_continental/1)
+      |> Enum.map(&geo_to_gcu/1)
+      |> Enum.filter(&within_continental/1)
+    end)
+    |> Enum.reject(&(length(&1) < 3))
+    |> Enum.map(fn pts ->
+      {xs, ys} = Enum.unzip(pts)
+      n = length(pts)
+      {Enum.sum(xs) / n * 256, Enum.sum(ys) / n * 256}
+    end)
+    |> Enum.take(@icon_budget_per_category)
+    |> Enum.map(fn {cx, cy} ->
+      %{
+        kind: {:icon, :tstorm},
+        label: nil,
+        x: cx - @icon_w / 2,
+        y: cy - @icon_h / 2,
+        w: @icon_w,
+        h: @icon_h,
+        priority: 2
+      }
+    end)
+  end
 
-    pressure_buffer =
-      Enum.map(pressure_coords, fn xy -> draw_text_abs(<<>>, pressure_letter, xy) end)
-      |> IO.iodata_to_binary()
+  # Thinned pressure callouts as collision boxes (lower-left, GCU px).
+  # Pressures place first (priority 0) - the originals never let a temp
+  # crowd out an H/L.
+  def build_pressure_callouts(json) do
+    json
+    |> extract_pressure_centers()
+    |> WeatherPlacement.thin_pressures()
+    |> Enum.map(fn {type, {cx, cy}} ->
+      # Put the x,y as the center of the (1.5x-sized) letter.
+      %{
+        kind: type,
+        label: nil,
+        x: cx - @pressure_text_width / 2,
+        y: cy - @pressure_text_height / 2,
+        w: @pressure_text_width,
+        h: @pressure_text_height,
+        priority: 0
+      }
+    end)
+  end
 
-    buffer <> pressure_buffer
+  @temp_callout_budget 15
+
+  # NDFD grid points converted to GCU px inside the map, keeping the
+  # forecast values ({x, y, temp, sky}).
+  def grid_to_gcu(points) do
+    Enum.flat_map(points, fn %{lat: lat, lon: lon} = point ->
+      xy = geo_to_gcu({lon, lat})
+
+      if within_continental(xy) do
+        {x, y} = xy
+        [
+          %{
+            x: x * 256,
+            y: y * 256,
+            temp: point.maxt,
+            sky: point[:sky],
+            wind: point[:wind],
+            gust: point[:gust]
+          }
+        ]
+      else
+        []
+      end
+    end)
+  end
+
+  # Temperature-community callouts from the GCU grid points: k-means
+  # communities labeled by modal decade -> interior same-decade communities
+  # become words ("warm").  Collision boxes, priority 1.
+  def build_temp_callouts(gcu_points) do
+    gcu_points
+    |> WeatherPlacement.temp_communities(@temp_callout_budget)
+    |> WeatherPlacement.label_temp_communities()
+    |> Enum.map(fn %{x: cx, y: cy, kind: kind, label: label} ->
+      w = @text_width * String.length(label)
+
+      %{
+        kind: kind,
+        label: label,
+        x: cx - w / 2,
+        y: cy - @text_height / 2,
+        w: w,
+        h: @text_height,
+        priority: 1
+      }
+    end)
+  end
+
+  def draw_pressures(buffer, placed, type, pressure_letter) do
+    placed
+    |> Enum.filter(&(&1.kind == type))
+    |> Enum.reduce(buffer, fn %{x: x, y: y}, buf ->
+      draw_text_abs(buf, pressure_letter, {x / 256, y / 256})
+    end)
   end
 
   # Using a json body of NOAA "feature collections", draw polygons for selected weather features,
-  # then extract and display high and low pressure locations.
-  def make_fc_weather(buffer, fc_json) do
+  # then the already-placed high and low pressure callouts.
+  def make_fc_weather(buffer, fc_json, placed_callouts) do
     has_rain_feature = Enum.any?(@rain_features, fn x -> has_feature(fc_json, x) end)
     has_snow_feature = Enum.any?(@snow_features, fn x -> has_feature(fc_json, x) end)
 
@@ -393,10 +585,11 @@ defmodule WeatherMapper do
     # These two calls could potentionally add weather objects to our Process dictionary
     |> draw_weather_features(fc_json, @rain_features, @color_black)
     |> draw_weather_features(fc_json, @snow_features, @color_white)
-    |> select_color(@color_blue)
-    |> make_pressures(fc_json, "high", "H")
-    |> select_color(@color_red)
-    |> make_pressures(fc_json, "low", "L")
+    |> text_attributes({@pressure_text_width / 256, @pressure_text_height / 256})
+    |> select_color(@color_white)
+    |> draw_pressures(placed_callouts, :high, "H")
+    |> draw_pressures(placed_callouts, :low, "L")
+    |> text_attributes({@text_width / 256, @text_height / 256})
     |> add_rain_legend(rain_y)
     |> add_snow_legend(snow_y)
 
@@ -409,13 +602,27 @@ defmodule WeatherMapper do
     |> Enum.flat_map(&Function.identity/1)
   end
 
-  # Write the text features from the NOAA XML temperatures, plus a headline.
-  def make_text(buffer, temp_urls) do
+  # Write the placed temperature / word callouts (yellow), wind words
+  # (white, per the 1988 map's "Windy"), plus a headline.
+  def make_text(buffer, placed_callouts) do
+    temps = Enum.filter(placed_callouts, &(&1.kind in [:temp, :word]))
+
     gcu_init(buffer)
     |> text_attributes({@text_width / 256, @text_height / 256})
     |> select_color(@color_yellow)
-    |> make_weather_temps(temp_urls)
+    |> then(fn buf ->
+      Enum.reduce(temps, buf, fn %{label: label, x: x, y: y}, b ->
+        draw_text_abs(b, label, {x / 256, y / 256})
+      end)
+    end)
     |> select_color(@color_white)
+    |> then(fn buf ->
+      placed_callouts
+      |> Enum.filter(&(&1.kind == :wind))
+      |> Enum.reduce(buf, fn %{label: label, x: x, y: y}, b ->
+        draw_text_abs(b, label, {x / 256, y / 256})
+      end)
+    end)
     |> draw_text_abs("Prodigy Reloaded Today's Forecast", {80 / 256, 188 / 256})
     |> draw(@cmd_set_point_rel, [])
   end
@@ -441,10 +648,27 @@ defmodule WeatherMapper do
       end
 
     if weather_json do
+      # Place everything together so nothing overlaps: pressures first
+      # (priority 0), then temperature communities (priority 1), then sky
+      # icons (priority 2).
+      gcu_grid = WeatherGrid.fetch_grid(output_path <> "cache") |> grid_to_gcu()
+
+      placed_callouts =
+        (build_pressure_callouts(feature_collection_json) ++
+           build_temp_callouts(gcu_grid) ++
+           build_icon_callouts(gcu_grid) ++
+           build_tstorm_callouts(feature_collection_json) ++
+           build_wind_callouts(gcu_grid))
+        |> WeatherPlacement.resolve_collisions()
+
       Logger.debug("Creating NAPLPS buffer")
+      # Isobars draw first so every other layer paints over them; gated by
+      # config :weather_overlay, isobars.
       pd_buffer =
-        make_fc_weather(<<>>, feature_collection_json)
-        |> make_text(get_temps_from_json(weather_json))
+        WeatherIsobars.append(<<>>, output_path <> "cache")
+        |> make_fc_weather(feature_collection_json, placed_callouts)
+        |> make_icons(placed_callouts)
+        |> make_text(placed_callouts)
 
       Logger.debug("Writing NAPLPS and presentation to output directory.")
       # WO is Weather Overlay
