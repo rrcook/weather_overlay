@@ -18,23 +18,23 @@ defmodule WeatherMapper do
   import NaplpsWriter
   use NaplpsConstants
 
-  # Constants used for geographic conversion, latitude & longitude to Prodigy X, Y
-
-  # @min_longitude        -124.10
-  # @min_longitude -126.10
-  # @max_longitude        -68.12
-  # @longitude_factor 3.7692
-
-  # @min_latitude 25.1
-  # @max_latitude         49.03
-  # @latitude_factor 5.375
-
-  # The x's and y's from looking at an equal area (laea, epsg 2163) map and inputting the
-  # latitude and longitude into Proj, getting the x and y back.
-  @west_2163 -2_027_511
-  @east_2163 2_514_264
-  @south_2163 -2_102_532
-  @north_2163 717_248
+  # Geographic conversion, latitude & longitude to Prodigy GCU X, Y.
+  #
+  # The background continental-US bitmap is an EPSG-2163 equal-area (US
+  # National Atlas LAEA) map, so weather is projected the same way: lon/lat ->
+  # Proj 2163 easting/northing (meters) -> a separable linear map onto the GCU
+  # pixel area. These four anchors are the 2163 meters at the map's pixel
+  # edges (west/east -> @min_x/@max_x, south/north -> @min_y/@max_y); they are
+  # calibrated against the bitmap with a crosshair overlay: crosshairs at known
+  # lon/lat landmarks projected through 2163 gave the pixel<->GCU mapping, then
+  # true bitmap features were fit back to 2163 meters. x from Cape Mendocino
+  # (west) and Eastport (east); y from south Texas and the straight 49N border
+  # (the border pins the north edge, which coastline landmarks left compressed
+  # ~10px south - the MT rain no longer fell short of the Canadian line).
+  @west_2163 -2_032_878
+  @east_2163 2_563_616
+  @south_2163 -2_156_767
+  @north_2163 690_339
 
   # the x' and y's from GCU, looking at the weather map in GCU and getting the x and y
   # from the cursor.
@@ -43,17 +43,22 @@ defmodule WeatherMapper do
   @min_y 53
   @max_y 182
 
-  @max_temp_x 240 / 256
-
-  @min_x_range 36 / 256
-  @max_x_range 253 / 256
-  @min_y_range 53 / 256
-  @max_y_range 182 / 256
-
   @x_factor (@max_x - @min_x) / (@east_2163 - @west_2163)
   @y_factor (@max_y - @min_y) / (@north_2163 - @south_2163)
 
-  @rain_features ["Rain", "Rain/Thunderstorms", "Heavy Rain/Flash Flooding Possible", "Severe Thunderstorms Possible"]
+  @max_temp_x 240 / 256
+
+  @min_x_range @min_x / 256
+  @max_x_range @max_x / 256
+  @min_y_range @min_y / 256
+  @max_y_range @max_y / 256
+
+  @rain_features [
+    "Rain",
+    "Rain/Thunderstorms",
+    "Heavy Rain/Flash Flooding Possible",
+    "Severe Thunderstorms Possible"
+  ]
   # T-storm icons are now placed through the callout pipeline
   # (build_tstorm_callouts) so they participate in collision resolution;
   # the per-feature draw hook is retired but the mechanism kept.
@@ -83,12 +88,13 @@ defmodule WeatherMapper do
 
   defp equalarea() do
     # In the interest of performance and calling this a lot we assume that
-    # the table is there and set up
+    # the table is there and set up.
     [equal_area: proj] = :ets.lookup(:weather, :equal_area)
     proj
   end
 
-  # The small lists from the feature collection are longitude, latitude, not lat, long
+  # The small lists from the feature collection are longitude, latitude, not lat, long.
+  # Project through EPSG 2163 (equal-area), then linearly onto the GCU map.
   def geo_to_gcu({longitude, latitude}) do
     {x_meters, y_meters} = Proj.from_lat_lng!({latitude, longitude}, equalarea())
     {meters_to_x(x_meters) / 256, meters_to_y(y_meters) / 256}
@@ -197,8 +203,8 @@ defmodule WeatherMapper do
       {:ok, {{String.to_float(longitude), String.to_float(latitude)}, String.to_float(temp_f)}}
     else
       err ->
-      Logger.warning("Problem retrieving temperature for #{get_text}, #{inspect(err)}")
-      err
+        Logger.warning("Problem retrieving temperature for #{get_text}, #{inspect(err)}")
+        err
     end
   end
 
@@ -250,6 +256,7 @@ defmodule WeatherMapper do
       Enum.reduce(list, {0, 0, [0]}, fn x, {acc_sum, acc_count, acc_list} ->
         {acc_sum + x + hd(acc_list), acc_count + 1, [x + hd(acc_list) | acc_list]}
       end)
+
     sum / count
   end
 
@@ -264,7 +271,9 @@ defmodule WeatherMapper do
     wo_fn = Map.get(@wo_fn_map, feature_text)
 
     case wo_fn do
-      nil -> :ok
+      nil ->
+        :ok
+
       _ ->
         Enum.each(gcu_polys, fn poly_list ->
           {xs, ys} = Enum.unzip(poly_list)
@@ -278,13 +287,19 @@ defmodule WeatherMapper do
   # Use the NOAA feature collection specified in json to get the desired feature.
   # Extract the polygon for the feature passed in as feature_text
   # Draw hatching in the color specified.
+  #
+  # A feature is a GeoJSON MultiPolygon: coordinates = [polygon, ...], each
+  # polygon = [ring, ...]. Enum.concat flattens one level to the full list of
+  # rings across *every* polygon - the old Enum.at(0) kept only the first
+  # polygon and silently dropped the rest (e.g. the western half of a
+  # two-part "Severe Thunderstorms Possible").
   def draw_weather_poly(buffer, json, feature_text, color) do
     feature = Enum.filter(json["features"], &(&1["name"] == feature_text)) |> Enum.at(0)
 
     feature_polys =
       case feature do
         nil -> []
-        _ -> feature["geometry"]["coordinates"] |> Enum.at(0)
+        _ -> feature["geometry"]["coordinates"] |> Enum.concat()
       end
 
     case feature_polys do
@@ -332,6 +347,7 @@ defmodule WeatherMapper do
   # Place the temperature text on the map.
   def place_temp(buffer, {xy, temp}) do
     {original_x, original_y} = xy
+
     # make sure the temp doesn't go off the right edge of the map, move it slightly left if necessary
     draw_x =
       if original_x > @max_temp_x do
@@ -339,6 +355,7 @@ defmodule WeatherMapper do
       else
         original_x
       end
+
     buffer
     |> draw_text_abs(temp, {draw_x, original_y})
   end
@@ -520,6 +537,7 @@ defmodule WeatherMapper do
 
       if within_continental(xy) do
         {x, y} = xy
+
         [
           %{
             x: x * 256,
@@ -580,18 +598,19 @@ defmodule WeatherMapper do
         {true, true} -> {54, 81}
       end
 
-    weather_buffer = gcu_init(buffer)
-    |> append_byte(@cmd_shift_in)
-    # These two calls could potentionally add weather objects to our Process dictionary
-    |> draw_weather_features(fc_json, @rain_features, @color_black)
-    |> draw_weather_features(fc_json, @snow_features, @color_white)
-    |> text_attributes({@pressure_text_width / 256, @pressure_text_height / 256})
-    |> select_color(@color_white)
-    |> draw_pressures(placed_callouts, :high, "H")
-    |> draw_pressures(placed_callouts, :low, "L")
-    |> text_attributes({@text_width / 256, @text_height / 256})
-    |> add_rain_legend(rain_y)
-    |> add_snow_legend(snow_y)
+    weather_buffer =
+      gcu_init(buffer)
+      |> append_byte(@cmd_shift_in)
+      # These two calls could potentionally add weather objects to our Process dictionary
+      |> draw_weather_features(fc_json, @rain_features, @color_black)
+      |> draw_weather_features(fc_json, @snow_features, @color_white)
+      |> text_attributes({@pressure_text_width / 256, @pressure_text_height / 256})
+      |> select_color(@color_white)
+      |> draw_pressures(placed_callouts, :high, "H")
+      |> draw_pressures(placed_callouts, :low, "L")
+      |> text_attributes({@text_width / 256, @text_height / 256})
+      |> add_rain_legend(rain_y)
+      |> add_snow_legend(snow_y)
 
     wos = Process.get(:wo, [])
     weather_buffer <> IO.iodata_to_binary(wos)
@@ -680,6 +699,5 @@ defmodule WeatherMapper do
     else
       IO.puts("No changes at this time.")
     end
-
   end
 end
