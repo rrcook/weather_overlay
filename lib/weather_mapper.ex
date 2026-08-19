@@ -647,8 +647,9 @@ defmodule WeatherMapper do
   end
 
   def make_weather_overlay() do
-    file_location = __DIR__ <> "/../assets/station_info.json"
-    output_path = __DIR__ <> "/../output/"
+    # priv/ ships inside a mix release; a source-tree relative path does not.
+    file_location = Application.app_dir(:weather_overlay, "priv/station_info.json")
+    output_path = Application.get_env(:weather_overlay, :output_dir, "output") <> "/"
 
     # Make sure the directory is there. File.mkdir will return :ok or :error, it
     # doesn't matter so we don't check.
