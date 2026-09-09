@@ -227,6 +227,7 @@ defmodule WeatherMapper do
       poly
       |> Enum.map(&List.to_tuple/1)
       |> Enum.map(&geo_to_gcu/1)
+      |> Enum.map(&clamp_to_map/1)
       # |> IO.inspect()
       |> Enum.unzip()
 
@@ -234,6 +235,16 @@ defmodule WeatherMapper do
 
     Enum.zip(diff_xs, diff_ys)
     # |> IO.inspect()
+  end
+
+  # NOAA feature polygons are not cut to the map: a rain area running out over
+  # the Atlantic or into Canada projects past the bitmap's edge, and anything
+  # beyond x = 1.0 is clipped by the NAPLPS decoder itself. Pin every vertex to
+  # the map box so the fill stops flush with the map instead of spilling over
+  # the partition.
+  defp clamp_to_map({x, y}) do
+    {x |> max(@min_x_range) |> min(@max_x_range),
+     y |> max(@min_y_range) |> min(@max_y_range)}
   end
 
   # Draw a polygon and properly terminate it in the GCU style.

@@ -63,9 +63,13 @@ defmodule WeatherIsobars do
 
       lines ->
         buffer
-        # minimal logical pel - the domain the decompiles show as
-        # "DOMAIN 200 192 192 201"
-        |> append_bytes(<<@cmd_domain, 0xC8, 0xC0, 0xC0, 0xC9>>)
+        # Isobars are the first layer in the object, so this is the stream's
+        # preamble: gcu_init emits the minimal logical pel (the domain the
+        # decompiles show as "DOMAIN 200 192 192 201") *and* the TEXTURE +
+        # shift-in that the domain alone leaves undefined - without them the
+        # isobar lines inherit whatever line texture the previously displayed
+        # object left in the decoder.
+        |> gcu_init()
         |> select_color(@color_blue)
         |> then(fn buf -> Enum.reduce(lines, buf, &draw_polyline(&2, &1)) end)
         |> draw(@cmd_set_point_rel, [])
