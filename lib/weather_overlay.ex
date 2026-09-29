@@ -17,13 +17,7 @@ defmodule WeatherOverlay do
   require Logger
 
   def main(_argv) do
-    Logger.debug("Initializing weather-based ets table.")
-    :ets.new(:weather, [:public, :named_table])
-    {:ok, proj} = Proj.from_epsg(2163)
-    :ets.insert(:weather, {:equal_area, proj})
-
     Logger.info("Creating new weather overlay presentation data object.")
     WeatherMapper.make_weather_overlay()
-
   end
 end

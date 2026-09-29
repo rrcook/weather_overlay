@@ -86,17 +86,10 @@ defmodule WeatherMapper do
       y <= @max_y_range
   end
 
-  defp equalarea() do
-    # In the interest of performance and calling this a lot we assume that
-    # the table is there and set up.
-    [equal_area: proj] = :ets.lookup(:weather, :equal_area)
-    proj
-  end
-
   # The small lists from the feature collection are longitude, latitude, not lat, long.
   # Project through EPSG 2163 (equal-area), then linearly onto the GCU map.
   def geo_to_gcu({longitude, latitude}) do
-    {x_meters, y_meters} = Proj.from_lat_lng!({latitude, longitude}, equalarea())
+    {x_meters, y_meters} = WeatherOverlay.Projection.from_lat_lng!({latitude, longitude})
     {meters_to_x(x_meters) / 256, meters_to_y(y_meters) / 256}
   end
 
